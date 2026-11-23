@@ -2,11 +2,7 @@
 
 面向 **Linux 版 ComfyUI / RunningHub** 的 Python 视频反推插件。
 
-保留 A/B 分段、素材准备、并行反推、最终审核及视频输出流程。模型调用及工具循环使用 Python；不包含 Go 程序、Go 源码、Harness SDK 或本地 HTTP 服务。
-
-主反推配置固定为 `https://api.deepseek.com`、`deepseek-flash`、`openai-completions`；审核地址可通过“数值2”修改，默认 `https://api.zdjapi.com`；审核模型和协议固定为 `gpt-6.1-sol`、`openai-completions`。两者均使用思考等级 `high`、超时1032秒、输出上限65536，语音模型使用插件自带目录。
-
-主反推和审核各有一个密钥输入，显示名称均为“数值”，默认空白；不会内置个人密钥。上方数值用于主反推，B审核规则下方的数值用于审核。审核“数值2”用于填写审核接口地址。模型、协议、思考等级和运行上限固定；旧图若原先“沿用当前AI”，审核数值需另行填写。
+保留 A/B 分段、素材准备、并行反推、最终审核及视频输出流程。模型调用及工具循环使用 Python。
 
 ## 安装到 Linux ComfyUI
 
