@@ -1,0 +1,4 @@
+# Install using the same Python environment that launches ComfyUI.
+# ComfyUI supplies torch, numpy, Pillow, av, aiohttp and psutil.
+sherpa-onnx==2.0.1
+jsonschema==4.26.0

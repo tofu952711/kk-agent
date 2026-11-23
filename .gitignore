@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+config.local.json
+data/
+user/
+dist/
+models/sensevoice/model.int8.onnx
+*.download

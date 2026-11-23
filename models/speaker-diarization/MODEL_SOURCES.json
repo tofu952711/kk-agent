@@ -1,0 +1,13 @@
+{
+  "segmentation": {
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+    "archive_sha256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+    "upstream": "https://huggingface.co/pyannote/segmentation-3.0"
+  },
+  "embedding": {
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+    "sha256": "f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11",
+    "upstream": "https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common",
+    "license": "Apache-2.0; see upstream model card"
+  }
+}

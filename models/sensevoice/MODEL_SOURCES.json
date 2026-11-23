@@ -1,0 +1,20 @@
+{
+  "model": "SenseVoiceSmall INT8",
+  "authors": "FunAudioLLM / FunASR / Alibaba Group; ONNX conversion by sherpa-onnx / csukuangfj",
+  "upstream": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+  "converted_from": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+  "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+  "model_license": "FunASR Model Open Source License Agreement 1.1; see LICENSE.model",
+  "code_license": "MIT; see LICENSE.code",
+  "sha256": {
+    "LICENSE.code": "4bc3bffe14ebe38cc67309991e04f92866835eac1c5e2e1abd37163f67c6de5f",
+    "LICENSE.conversion": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17",
+    "LICENSE.model": "7dba975a2069691db4992b0592d70828b330d2f8a30a71450f4e152a554e84f8",
+    "model.int8.onnx": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
+    "tokens.txt": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+  },
+  "files": {
+    "model.int8.onnx": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+    "tokens.txt": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt"
+  }
+}

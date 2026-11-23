@@ -1,0 +1,16 @@
+[project]
+name = "comfyui-kkagent-runninghub-python"
+version = "0.2.4"
+description = "Linux KK video reverse nodes with a task-local Python runtime"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["sherpa-onnx==2.0.1", "jsonschema==4.26.0"]
+
+[project.urls]
+Repository = "https://github.com/tofu952711/kk-agent-runninghub"
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "KK agent runninghub"
+Icon = ""
