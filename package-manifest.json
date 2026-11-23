@@ -16,8 +16,8 @@
     "sha256": "39af6ba4e8e834343ed54c97d4554a097bbf6c6200e35f58c5c856f44f7cb674"
   },
   "VALIDATION.md": {
-    "bytes": 6217,
-    "sha256": "61056452eecfc71a9269d608064da9d68a22f2f593f794383b9dfbb49dc76771"
+    "bytes": 6634,
+    "sha256": "286b8d255c7decc26fa57b02a917e4e2646e2367497e3799f1ef01e16952ca2f"
   },
   "__init__.py": {
     "bytes": 946,
@@ -296,8 +296,8 @@
     "sha256": "8f0edbab2e96e2c05b6bd4d6bba684b016b56c9dfd612662ec52d5439a0c087a"
   },
   "validation-summary.json": {
-    "bytes": 2594,
-    "sha256": "9e763030418551ec387111fc628a5381911bb90e32c25b20f61057f9b573efa9"
+    "bytes": 2854,
+    "sha256": "b54b2c517370e3d735e09c0896997658bafa44f6ebed1d75e22deffbaefc601c"
   },
   "web/kkgo_video_inputs.js": {
     "bytes": 4790,

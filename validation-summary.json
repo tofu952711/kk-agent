@@ -83,5 +83,9 @@
     "all_passed": false,
     "verified_on": "2026-11-24"
   },
-  "github_model_installer_checks_passed": true
+  "github_model_installer_checks_passed": true,
+  "github_fresh_clone_passed": true,
+  "github_release_asset_sha256_verified": true,
+  "github_fresh_model_download_passed": false,
+  "github_fresh_model_download_error": "RemoteDisconnected: remote end closed connection without response (local WSL network)"
 }
