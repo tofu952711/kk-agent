@@ -14,10 +14,11 @@ from .video_segments import validate_segments
 from .workflow import workflow_bridge
 from .b_review import REVIEW_RULES
 from .review_ai import resolve_review_ai
+from .a_reference_video import prepare_reference_video
 
 
-def read_tool_videos(output, info):
-    """Load finished tool files; never cut or invent a fallback plan here."""
+def read_tool_videos(output, info, timeout=900):
+    """Keep complete tool ranges for analysis; bound downstream references to 30s."""
     from comfy_api.latest import InputImpl
     from comfy_execution.graph_utils import ExecutionBlocker
     path = output / "video_segments.json"
@@ -30,14 +31,30 @@ def read_tool_videos(output, info):
             plan.get("executor") != "ai_invoked_media_tool" or not plan.get("materialized") or
             len(files) != len(ranges)):
         raise RuntimeError("链路B分段失败：工具未返回完整的分段视频成品；未开始反推")
-    videos = []
-    for name in files:
+    videos, references, analysis_durations = [], [], []
+    started = time.monotonic()
+    for index, (name, segment) in enumerate(zip(files, ranges), 1):
         target = (output / name).resolve(strict=True)
         if not target.is_relative_to(output.resolve()) or not target.is_file():
             raise RuntimeError("链路B分段工具返回了无效文件")
-        videos.append(InputImpl.VideoFromFile(io.BytesIO(target.read_bytes())))
-    plan["storage"] = "in-memory VIDEO loaded from AI tool outputs; survives job cleanup"
+        video = InputImpl.VideoFromFile(io.BytesIO(target.read_bytes()))
+        actual = float(video.get_duration())
+        analysis_durations.append(actual)
+        clip_info = {**info, "duration_seconds": actual,
+                     "audio_tracks": int(bool(plan.get("keep_audio", True) and info.get("audio_tracks")))}
+        reference, record = prepare_reference_video(video, output / "reference-videos" / str(index),
+            clip_info, timeout - (time.monotonic() - started), source=target, chain="B")
+        reference_end = segment["start"] + min(segment["end"] - segment["start"],
+            record.get("reference_end_seconds", record["actual_duration_seconds"]))
+        references.append({**record, "segment_index": index, "analysis_start": segment["start"],
+            "analysis_end": segment["end"], "reference_source_start": segment["start"],
+            "reference_source_end": reference_end})
+        videos.append(reference)
+    plan["storage"] = "in-memory references capped at 30s; complete tool files retained for analysis"
     plan["actual_durations"] = [float(video.get_duration()) for video in videos]
+    plan["analysis_actual_durations"] = analysis_durations
+    plan["reference_limit_seconds"] = 30.0
+    plan["reference_videos"] = references
     videos.extend(ExecutionBlocker(None) for _ in range(5 - len(videos)))
     return videos, plan
 
@@ -99,7 +116,8 @@ def iter_chain_b(node, video, routing, api_key, base_url, model, requirement,
         print("[KKGO] 链路B：AI正在按分段规定调用工具裁切视频", flush=True)
         segment_answer = segment_bridge.ask(segment_bridge.session_id("chain-b-segment"),
             requirement + "\n\n" + segment_media, images, timeout=timeout_s, on_progress=observe)
-        videos, video_record = read_tool_videos(output, report["video"])
+        videos, video_record = read_tool_videos(output, report["video"],
+            timeout=timeout_s - (time.monotonic() - prepared_at))
         segmented_at = time.monotonic()
         # The staged node returns here. Its VIDEO buffers can immediately feed
         # SaveVideo while a separate async node resumes reverse inference.

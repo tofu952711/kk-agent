@@ -1,5 +1,5 @@
 {
-  "version": "0.2.5",
+  "version": "0.2.6",
   "offline_install_python312": true,
   "wheel_resolution_python": [
     "3.10",
@@ -22,5 +22,10 @@
     "all_passed": false,
     "note": "Previous known result; not fixed by packaging."
   },
-  "debug_export_included": false
+  "debug_export_included": false,
+  "b_reference_limit_tests": {
+    "linux_passed": 3,
+    "windows_go_passed": 3,
+    "full_analysis_preserved": true
+  }
 }

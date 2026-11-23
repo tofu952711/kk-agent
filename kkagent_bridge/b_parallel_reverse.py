@@ -174,6 +174,8 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
         images = refs + prepared_images(output, overview)
         transcript = json.loads((output / "transcript.json").read_text(encoding="utf-8"))
         evidence = ("【已完成的实际分段】\n" + json.dumps(segments, ensure_ascii=False) +
+                    "\n【参考视频输出范围；分析仍覆盖完整分段】\n" +
+                    json.dumps(video_record.get("reference_videos", []), ensure_ascii=False) +
                     "\n【参考图编号】\n" + json.dumps(slots) +
                     "\n前面的独立参考图依次对应以上image插口；之后为原视频全片概览拼图。\n" +
                     "\n".join(f"概览图片原片秒数：{s['actual_times']}" for s in overview["sheets"]) +
@@ -202,7 +204,9 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
         begin = time.monotonic()
         control.check()
         directory, text, sheets, scope = prepare_segment_bundle(output, report, slots,
-            index, segment, len(segments), contract)
+            index, segment, len(segments), contract,
+            reference=next((r for r in video_record.get("reference_videos", [])
+                            if r["segment_index"] == index), None))
         images = refs + sheets
         audit = audit_dir / f"{speed.run_id}-b-reverse-{index}.jsonl"
         with bridge_context() as bridge:
@@ -256,6 +260,7 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
         transcript = json.loads((output / "transcript.json").read_text(encoding="utf-8"))
         materials = prepared_evidence_text(review_report, shots, transcript, slots)
         payload = {"actual_segments": segments, "shared_context": contract,
+                   "reference_videos": video_record.get("reference_videos", []),
                    "note": "按本次审核规定检查全部草稿；检查项与修改范围以审核规定为准。",
                    "drafts": [{"segment_index": r["segment_index"], "segment": r["segment"],
                                "text": r["text"],

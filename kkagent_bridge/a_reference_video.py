@@ -12,33 +12,38 @@ from .ffmpeg_segments import executables
 
 
 def prepare_a_reference(video, output: Path, info, timeout=900):
+    return prepare_reference_video(video, output, info, timeout)
+
+
+def prepare_reference_video(video, output: Path, info, timeout=900, *, source=None, chain="A"):
     """Leave source-video.mp4 and all full-length evidence untouched."""
     duration = float(info['duration_seconds'])
     record = {'count': 1, 'split_required': False, 'ai_plan_submitted': False,
               'analysis_duration_seconds': duration, 'source_duration_seconds': duration,
               'reference_limit_seconds': 30.0, 'trimmed': duration > 30,
               'discarded_reference_tail_seconds': max(0.0, duration - 30),
-              'plan_origin': 'chain_a_reference_video', 'encoding_seconds': []}
+              'plan_origin': f'chain_{chain.lower()}_reference_video', 'encoding_seconds': []}
     if duration <= 30:
         record.update(actual_duration_seconds=duration, storage='original VIDEO; full source is within 30 seconds')
         return video, record
 
     from comfy_api.latest import InputImpl
     ffmpeg, ffprobe = executables()
-    source = output.parent / 'source-video.mp4'
-    target = output / 'chain-a-reference-30s.mp4'
+    source = Path(source) if source is not None else output.parent / 'source-video.mp4'
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / f'chain-{chain.lower()}-reference-30s.mp4'
     began = time.monotonic()
 
     def run(command):
         remaining = timeout - (time.monotonic() - began)
         if remaining <= 0:
-            raise RuntimeError('链路A参考视频裁切超时')
+            raise RuntimeError(f'链路{chain}参考视频裁切超时')
         from .cancellation import cancellable_run
         result = cancellable_run([str(arg) for arg in command], capture_output=True, text=True,
                                 encoding='utf-8', errors='replace', timeout=remaining,
                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if result.returncode:
-            raise RuntimeError('链路A参考视频裁切失败：' + (result.stderr or result.stdout)[-1500:])
+            raise RuntimeError(f'链路{chain}参考视频裁切失败：' + (result.stderr or result.stdout)[-1500:])
         return result.stdout
 
     limit = 30.0
@@ -57,18 +62,18 @@ def prepare_a_reference(video, output: Path, info, timeout=900):
         durations = [float(probe['format']['duration'])] + [float(s['duration']) for s in streams if 'duration' in s]
         actual = max(durations)
         if not math.isfinite(actual) or actual <= 0:
-            raise RuntimeError('链路A裁切成品时长无效')
+            raise RuntimeError(f'链路{chain}裁切成品时长无效')
         if actual <= 30.0:
             break
         # Container/audio/frame rounding may extend a fractional-fps endpoint.
         # Remove at most the required boundary frame rather than exceed the cap.
         limit -= max(actual - 30.0, 1 / max(float(info.get('fps') or 30), 1))
     else:
-        raise RuntimeError(f'链路A参考视频仍超过30秒：{actual:g}秒，未输出')
+        raise RuntimeError(f'链路{chain}参考视频仍超过30秒：{actual:g}秒，未输出')
     if (video_stream['width'], video_stream['height']) != (info['width'], info['height']):
-        raise RuntimeError('链路A参考视频画幅校验失败')
+        raise RuntimeError(f'链路{chain}参考视频画幅校验失败')
     if any(s['codec_type'] == 'audio' for s in streams) != bool(info.get('audio_tracks')):
-        raise RuntimeError('链路A参考视频音轨校验失败')
+        raise RuntimeError(f'链路{chain}参考视频音轨校验失败')
     # Materialize bytes so downstream consumers survive temporary job cleanup.
     result = InputImpl.VideoFromFile(io.BytesIO(target.read_bytes()))
     record.update(actual_duration_seconds=actual, encoding_seconds=[round(time.monotonic() - began, 3)],
