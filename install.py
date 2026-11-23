@@ -1,14 +1,13 @@
-"""Install the pinned SenseVoice asset omitted from the Git repository."""
+"""Install the full Linux bundle using local files only."""
 from pathlib import Path
 import hashlib
-import shutil
-import tempfile
-import urllib.request
+import json
+import os
+import platform
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parent
-MODEL = ROOT / "models" / "sensevoice" / "model.int8.onnx"
-MODEL_URL = "https://github.com/tofu952711/kk-agent-runninghub/releases/download/models-v1/model.int8.onnx"
-MODEL_SHA256 = "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
 
 
 def sha256(path):
@@ -20,25 +19,29 @@ def sha256(path):
 
 
 def main():
-    if MODEL.is_file() and sha256(MODEL) == MODEL_SHA256:
-        print("SenseVoice model is ready.")
-        return
-    MODEL.parent.mkdir(parents=True, exist_ok=True)
-    print("Downloading SenseVoice model (239 MB) from GitHub Release...", flush=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=MODEL.parent, suffix=".download", delete=False) as output:
-            temporary = Path(output.name)
-            request = urllib.request.Request(MODEL_URL, headers={"User-Agent": "KK-agent-runninghub-installer"})
-            with urllib.request.urlopen(request, timeout=120) as response:
-                shutil.copyfileobj(response, output)
-        if sha256(temporary) != MODEL_SHA256:
-            raise RuntimeError("SenseVoice model SHA-256 mismatch; installation stopped.")
-        temporary.replace(MODEL)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-    print("SenseVoice model is ready.")
+    if not sys.platform.startswith("linux") or platform.machine() not in ("x86_64", "amd64"):
+        raise RuntimeError("完整包适用于 Linux x86_64")
+    if sys.implementation.name != "cpython" or sys.version_info[:2] not in ((3, 10), (3, 11), (3, 12), (3, 13)):
+        raise RuntimeError("离线依赖适用于 CPython 3.10—3.13")
+    manifest = ROOT / "bundle-manifest.json"
+    if not manifest.is_file():
+        raise RuntimeError("请使用 GitHub Release 中的完整交付包，源码 ZIP 不含离线资源")
+    files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+    for name, metadata in files.items():
+        path = ROOT / name
+        if not path.is_file() or sha256(path) != metadata["sha256"]:
+            raise RuntimeError("完整包文件缺失或校验失败：" + name)
+    for name in ("ffmpeg", "ffprobe"):
+        path = ROOT / "vendor" / "ffmpeg" / "linux-x86_64" / "bin" / name
+        path.chmod(path.stat().st_mode | 0o111)
+    environment = os.environ.copy()
+    environment.update(PIP_NO_INDEX="1", PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_CONFIG_FILE=os.devnull)
+    subprocess.run([sys.executable, "-m", "pip", "--isolated", "install", "--no-index",
+                    "--find-links", str(ROOT / "vendor" / "wheels"), "--only-binary=:all:",
+                    "--disable-pip-version-check", "-r", str(ROOT / "requirements.txt")],
+                   env=environment, check=True)
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "check_linux.py")], check=True)
+    print("完整包离线安装完成；重启 ComfyUI 后使用。")
 
 
 if __name__ == "__main__":

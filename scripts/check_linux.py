@@ -5,6 +5,8 @@ import json
 import shutil
 import subprocess
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "kkagent_bridge"))
+from ffmpeg_segments import executables
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,16 +22,18 @@ def main():
             importlib.import_module(name)
         except (ImportError, OSError) as exc:
             errors.append(f"Dependency {name}: {type(exc).__name__}")
-    for name in ("ffmpeg", "ffprobe"):
-        if not shutil.which(name):
-            errors.append(f"Missing system executable: {name}")
-    if shutil.which("ffmpeg"):
+    try:
+        ffmpeg, ffprobe = executables()
+    except RuntimeError as exc:
+        errors.append(str(exc))
+    else:
         try:
-            codecs = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True, timeout=10)
+            codecs = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, check=True, timeout=10)
+            subprocess.run([ffprobe, "-version"], capture_output=True, check=True, timeout=10)
             if "libx264" not in codecs.stdout:
-                errors.append("System FFmpeg must include libx264")
+                errors.append("FFmpeg must include libx264")
         except (OSError, subprocess.SubprocessError):
-            errors.append("System FFmpeg could not be executed")
+            errors.append("Bundled FFmpeg/FFprobe could not be executed")
     for name in ("sensevoice/model.int8.onnx", "sensevoice/tokens.txt", "speaker-diarization/segmentation.onnx", "speaker-diarization/speaker_embedding.onnx"):
         if not (ROOT / "models" / name).is_file():
             errors.append("Missing model asset: " + name)

@@ -1,91 +1,26 @@
 {
-  "source_unchanged": true,
-  "schema": {
-    "KKGO_FullVideoAgent": {
-      "changed_fields": [
-        "display_name",
-        "category",
-        "retired_reverse_settings",
-        "api_key.display_name",
-        "fixed_review_settings"
-      ],
-      "input_output_compatible": false,
-      "legacy_frontend_migration": true
-    },
-    "KKGO_VideoSegments": {
-      "changed_fields": [
-        "display_name",
-        "category",
-        "retired_reverse_settings",
-        "api_key.display_name",
-        "fixed_review_settings"
-      ],
-      "input_output_compatible": false,
-      "legacy_frontend_migration": true
-    },
-    "KKGO_VideoReverse": {
-      "changed_fields": [
-        "display_name",
-        "category",
-        "retired_reverse_settings",
-        "api_key.display_name",
-        "fixed_review_settings"
-      ],
-      "input_output_compatible": false,
-      "legacy_frontend_migration": true
-    }
-  },
+  "version": "0.2.5",
+  "offline_install_python312": true,
+  "wheel_resolution_python": [
+    "3.10",
+    "3.11",
+    "3.12",
+    "3.13"
+  ],
   "runtime_tests_passed": 16,
-  "process_tests_passed": 1,
-  "linux_only_tests_skipped": 1,
-  "workflow_checks": {
-    "duration_boundaries_mutually_exclusive": true,
-    "only_selected_chain_rule_fields_requested": true,
-    "concurrent_A_B_model_requests_overlap": true,
-    "no_cross_chain_user_or_tool_context": true,
-    "A_passthrough_and_B_split_video_outputs": true,
-    "A_ignores_B_rules_and_uses_shared_reviewer": true,
-    "B_ignores_A_rules": true,
-    "B_children_and_reviewer_completed": true,
-    "VideoJob_double_consumption_idempotent": true,
-    "A_cleanup_does_not_cancel_B_task": true,
-    "monitoring_run_ids_separate": true,
-    "all_model_connections_and_workers_closed": true,
-    "no_remaining_owned_subprocesses": true
-  },
-  "runtime_after": {
-    "backend": "python",
-    "persistent_service": false,
-    "active_turns": 0,
-    "media_workers": 0
-  },
-  "js_syntax_files": 4,
-  "linux_environment_tested": true,
-  "runninghub_tested": false,
-  "model_gateway_calls_paid": 0,
-  "linux_runtime_tests_passed": 16,
   "linux_process_tests_passed": 2,
-  "linux_workflow_checks_passed": 13,
-  "live_comfy_queue_test": true,
+  "ab_workflow_checks_passed": 13,
   "real_onnx_models_loaded": true,
-  "linux_gpu_usable": false,
-  "fixed_reverse_settings_verified": true,
-  "legacy_widget_migration_verified": true,
-  "fixed_review_settings_verified": true,
-  "legacy_review_key_migration_verified": true,
-  "usage_ui_removed": true,
-  "usage_readback_routes_removed": true,
+  "silence_asr_text": "没。",
+  "runninghub_tested": false,
+  "paid_api_requests": 0,
   "node_lifecycle_suite": {
     "total": 8,
     "passed": 3,
     "failures": 2,
     "errors": 3,
     "all_passed": false,
-    "verified_on": "2026-11-24"
+    "note": "Previous known result; not fixed by packaging."
   },
-  "github_model_installer_checks_passed": true,
-  "github_fresh_clone_passed": true,
-  "github_release_asset_sha256_verified": true,
-  "github_fresh_model_download_passed": false,
-  "github_fresh_model_download_error": "RemoteDisconnected: remote end closed connection without response (local WSL network)"
+  "debug_export_included": false
 }

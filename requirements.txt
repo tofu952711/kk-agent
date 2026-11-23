@@ -1,4 +1,10 @@
-# Install using the same Python environment that launches ComfyUI.
-# ComfyUI supplies torch, numpy, Pillow, av, aiohttp and psutil.
+# Offline wheel set included in vendor/wheels; install.py never accesses an index.
 sherpa-onnx==2.0.1
+sherpa-onnx-core==2.0.1
 jsonschema==4.26.0
+attrs==26.1.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+typing-extensions==4.16.0
+rpds-py==0.30.0; python_version < "3.11"
+rpds-py==2026.9.1; python_version >= "3.11"

@@ -9,3 +9,5 @@ user/
 dist/
 models/sensevoice/model.int8.onnx
 *.download
+vendor/
+bundle-manifest.json

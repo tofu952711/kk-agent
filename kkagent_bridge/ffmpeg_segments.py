@@ -12,11 +12,13 @@ import uuid
 
 
 def executables():
+    bundled = Path(__file__).resolve().parents[1] / "vendor" / "ffmpeg" / "linux-x86_64" / "bin"
     result = []
     for name in ("ffmpeg", "ffprobe"):
-        found = shutil.which(name)
+        local = bundled / name
+        found = str(local) if local.is_file() else shutil.which(name)
         if not found:
-            raise RuntimeError(f"Linux 缺少 {name}，请安装系统 FFmpeg 并保证其位于 ComfyUI 的 PATH 中")
+            raise RuntimeError(f"缺少 {name}，请使用包含媒体工具的完整交付包")
         result.append(found)
     return result
 
