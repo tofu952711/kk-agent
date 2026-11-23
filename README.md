@@ -30,6 +30,4 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-KKAgent-RunningHub
 /path/to/comfy-venv/bin/python scripts/check_linux.py
 ```
 
-同一台 ComfyUI 只启用一个注册 `KKGO_*` 节点的版本。完整包不包含个人密钥、任务素材、运行历史或临时桌面调试导出功能。
-
 验证范围和已知未通过项目见 `VALIDATION.md`。离线安装成功不代表 RunningHub 容器已完成实机验收，也不代表尚待处理的提示词准确性及特殊生命周期问题已经修复。
