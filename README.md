@@ -88,7 +88,3 @@ COMFYUI_PATH=/path/to/ComfyUI python -B tests/verify_workflows.py
 ```
 
 测试使用占位 Key、本地模拟模型和真实 FFmpeg，**不会调用付费模型**。此版本尚未在 RunningHub 容器中完成实机联调或审核，不能将本机验证等同于平台上线成功。
-
-## 0.2.4 审核地址
-
-审核区域恢复可填写的地址输入，显示为“数值2”，默认 https://api.zdjapi.com。审核模型 gpt-6.1-sol、协议 openai-completions 和高思考等级保持固定。旧独立审核配置保留原地址，0.2.2/0.2.3旧图自动补入默认地址；主反推配置不变。
