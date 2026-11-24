@@ -1,13 +1,13 @@
-# KK agent runninghub
+# KK agent
 
-面向 Linux ComfyUI / RunningHub 的视频反推插件，包含 A/B 分段、并行反推、审核及视频输出。
+面向 Linux ComfyUI 的视频反推插件，包含 A/B 分段、并行反推、审核及视频输出。
 
 ## 完整包安装
 
-将交付的 `ComfyUI-KKAgent-RunningHub` 目录放入 ComfyUI 的 `custom_nodes/`，使用启动 ComfyUI 的 Python 执行：
+将交付的 `ComfyUI-KKAgent` 目录放入 ComfyUI 的 `custom_nodes/`，使用启动 ComfyUI 的 Python 执行：
 
 ```bash
-cd /path/to/ComfyUI/custom_nodes/ComfyUI-KKAgent-RunningHub
+cd /path/to/ComfyUI/custom_nodes/ComfyUI-KKAgent
 /path/to/comfy-venv/bin/python install.py
 ```
 
@@ -30,7 +30,7 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-KKAgent-RunningHub
 /path/to/comfy-venv/bin/python scripts/check_linux.py
 ```
 
-验证范围和已知未通过项目见 `VALIDATION.md`。离线安装成功不代表 RunningHub 容器已完成实机验收，也不代表尚待处理的提示词准确性及特殊生命周期问题已经修复。
+验证范围和已知未通过项目见 `VALIDATION.md`。离线安装成功不代表目标容器已完成实机验收，也不代表尚待处理的提示词准确性及特殊生命周期问题已经修复。
 
 ## 参考视频时长
 

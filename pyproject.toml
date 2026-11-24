@@ -8,7 +8,7 @@ license = {text = "MIT"}
 dependencies = ["sherpa-onnx==2.0.1", "jsonschema==4.26.0"]
 
 [project.urls]
-Repository = "https://github.com/tofu952711/kk-agent-runninghub"
+Repository = "https://github.com/tofu952711/kk-agent"
 
 [tool.comfy]
 PublisherId = ""
