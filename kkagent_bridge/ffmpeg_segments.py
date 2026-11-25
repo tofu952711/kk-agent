@@ -16,9 +16,12 @@ def executables():
     result = []
     for name in ("ffmpeg", "ffprobe"):
         local = bundled / name
-        found = str(local) if local.is_file() else shutil.which(name)
+        configured = os.environ.get("KKGO_" + name.upper(), "").strip()
+        found = (shutil.which(configured) or configured) if configured else (str(local) if local.is_file() else shutil.which(name))
+        if found and not os.access(found, os.X_OK):
+            raise RuntimeError(f"{name} is not executable: {found}")
         if not found:
-            raise RuntimeError(f"缺少 {name}，请使用包含媒体工具的完整交付包")
+            raise RuntimeError(f"缺少 {name}：请先安装系统 FFmpeg（含 ffprobe），或设置 KKGO_{name.upper()}，也可使用完整离线包")
         result.append(found)
     return result
 

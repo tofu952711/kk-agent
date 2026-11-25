@@ -23,19 +23,20 @@ def configure_media_config(cfg, video, model_directory=""):
     stage_video(video, source)
     output = root / "media-analysis"
     output.mkdir()
-    configured = model_directory or os.environ.get("KKGO_ASR_MODEL_DIR", "")
-    package_dir = Path(__file__).resolve().parents[1]
-    model_dir = Path(configured).expanduser() if configured else package_dir / "models" / "sensevoice"
-    if not model_dir.is_absolute():
-        model_dir = package_dir / model_dir
-    model_dir = model_dir.resolve()
+    # Keep explicit/legacy paths while allowing ComfyUI's shared model configuration.
+    from .model_paths import model_directory as resolve_model_directory
+    model_dir = resolve_model_directory("sensevoice", model_directory)
     cfg["media_model_dir"] = str(model_dir)
     # Media tools use ComfyUI's Python (PyAV/Pillow/numpy); Harness still runs in
     # its own SDK runtime, including bundled Python on portable Windows.
     command = [str(Path(__file__).with_name("media_server.py")), "--video", str(source), "--output", str(output)]
     if model_dir.is_dir():
         command.extend(["--model-dir", str(model_dir)])
-    media_env = {"PYTHONIOENCODING": "utf-8"}
+    from .ffmpeg_segments import executables
+    ffmpeg, ffprobe = executables()
+    media_env = {"PYTHONIOENCODING": "utf-8",
+                 "KKGO_SPEAKER_MODEL_DIR": str(resolve_model_directory("speaker-diarization")),
+                 "KKGO_FFMPEG": ffmpeg, "KKGO_FFPROBE": ffprobe}
     # Harness MCP stdio does not inherit arbitrary parent environment variables.
     for name in ("KKGO_SPEAKER_MODEL_DIR",):
         if name in os.environ:

@@ -1,36 +1,69 @@
 # KK agent runninghub
 
-面向 Linux ComfyUI / RunningHub 的视频反推插件，包含 A/B 分段、并行反推、审核及视频输出。
+Linux ComfyUI / RunningHub video analysis, segmentation, parallel reverse prompting, review and reference-frame outputs. Models and media are processed locally; configured remote AI requests require your own API credentials. RunningHub certification is not implied.
 
-## 完整包安装
+## Source / ComfyUI Manager installation (0.2.18+)
 
-将交付的 `ComfyUI-KKAgent-RunningHub` 目录放入 ComfyUI 的 `custom_nodes/`，使用启动 ComfyUI 的 Python 执行：
-
-```bash
-cd /path/to/ComfyUI/custom_nodes/ComfyUI-KKAgent-RunningHub
-/path/to/comfy-venv/bin/python install.py
-```
-
-安装只使用包内文件，不下载模型、媒体工具或 Python 依赖，无需 apt、sudo 或编译。安装完成后重启 ComfyUI，并刷新网页。
-
-## 已包含
-
-- SenseVoice 语音模型、分词表，以及两个说话人分析模型。
-- Linux x86_64 FFmpeg / FFprobe，含 libx264 编码器；插件优先使用自带工具。
-- CPython 3.10、3.11、3.12、3.13 对应的新增依赖 wheel 与全部传递依赖。
-- 插件代码、前端、第三方来源和许可证、文件校验清单及验证记录。
-
-完整包见本仓库 Releases。GitHub 的自动 Source code ZIP / 单独 git clone 仅包含源码，不能代替完整交付包。完整包获取后，安装过程无需联网。实际模型 API 调用仍需网络及用户填写的凭据。
-
-## 环境与检查
-
-目标环境：Linux x86_64、glibc 2.28 或更高、CPython 3.10—3.13，以及支持 `comfy_api.latest` 的现有 ComfyUI。ComfyUI 自带的 torch、numpy、Pillow、av、aiohttp、psutil 沿用平台环境；本插件不会替换平台的 CUDA / PyTorch。
+Use the Python environment that runs ComfyUI. Linux x86_64, Python 3.10+, a ComfyUI version supporting `comfy_api.latest` (tested: 0.45.0), and FFmpeg with FFprobe are required. Keep the existing ComfyUI PyTorch/CUDA environment.
 
 ```bash
-/path/to/comfy-venv/bin/python scripts/check_linux.py
+cd /path/to/ComfyUI/custom_nodes
+git clone https://github.com/tofu952711/kk-agent.git ComfyUI-KKAgent-RunningHub
+/path/to/comfy-venv/bin/python -m pip install -r ComfyUI-KKAgent-RunningHub/requirements.txt
+/path/to/comfy-venv/bin/python ComfyUI-KKAgent-RunningHub/install.py --comfy-root /path/to/ComfyUI
 ```
 
-验证范围和已知未通过项目见 `VALIDATION.md`。离线安装成功不代表 RunningHub 容器已完成实机验收，也不代表尚待处理的提示词准确性及特殊生命周期问题已经修复。
+Alternatively unzip the `kk-agent-runninghub-0.2.18-source-linux.zip` release into `custom_nodes/`. In the Manager git-URL installation flow, Manager installs `requirements.txt` and runs the `install.py` hook. The source hook does not run pip, does not require a bundle manifest or local wheels, and does not replace PyTorch/CUDA. It checks prerequisites, verifies existing model hashes and downloads only missing model assets from their original sources or SHA256-locked existing GitHub mirrors.
+
+Install system FFmpeg/FFprobe before installing models. Existing bundled tools remain supported; explicit `KKGO_FFMPEG` and `KKGO_FFPROBE` executable paths take priority. There is no automatic apt/sudo or runtime package installation. Restart ComfyUI and refresh the webpage after installation/update.
+
+## Models and upgrade compatibility
+
+New source installations use:
+
+```text
+ComfyUI/models/kkagent/
+  sensevoice/model.int8.onnx
+  sensevoice/tokens.txt
+  speaker-diarization/segmentation.onnx
+  speaker-diarization/speaker_embedding.onnx
+```
+
+The installer verifies SHA256 for all assets, including the original segmentation archive before extracting its single model file. Downloads are only performed by the installation hook, never during node import or inference. Source release ZIPs do not include model weights. Two historical speaker model files remain tracked in Git to avoid deleting existing installations' models on `git pull`; they are not included in the new source ZIP. They can be reused without downloading again.
+
+Model directory priority: explicit `KKGO_ASR_MODEL_DIR` / `KKGO_SPEAKER_MODEL_DIR`, complete configured ComfyUI shared model folders, then complete legacy plugin-local `models/sensevoice` / `models/speaker-diarization` folders. A complete old installation continues using its existing models without moving, deleting or duplicating them. Partial legacy groups can be copied into one complete shared group; differing existing files are never silently overwritten.
+
+For shared model stores, merge `extra_model_paths.yaml.example` into ComfyUI's `extra_model_paths.yaml` and edit `base_path`. The model categories are `kkagent_sensevoice` and `kkagent_speaker`. The actual selected speaker/ASR paths and media executable paths are passed into isolated media workers, so subprocesses use the same configuration.
+
+Original model sources and licenses are recorded in `models/*/MODEL_SOURCES.json`, `scripts/model_assets.py` and `THIRD_PARTY_NOTICES.md`. They remain separate from the plugin's MIT license.
+
+## Existing full offline bundles
+
+Existing full offline releases remain available in Releases. For a complete bundle containing wheels, models, FFmpeg/FFprobe and `bundle-manifest.json`, use:
+
+```bash
+/path/to/comfy-venv/bin/python install.py --offline --comfy-root /path/to/ComfyUI
+```
+
+This explicit installation command verifies the bundle and installs the pinned `requirements-offline.txt` from bundled wheels with `--no-index`. No network is used. Older releases retain their original installer and instructions. Do not use `--offline` with a source-only ZIP or a clone. Ordinary source requirements list direct dependencies with compatible ranges; only the offline lock pins transitive dependency versions.
+
+## Example and validation
+
+Open `Workflow > Browse Templates` and select `KKagent_basic`, or drag `example_workflows/KKagent_basic.json` into ComfyUI. Upload/select a video, fill in the reverse-model and review-model keys, and replace the illustrative rules with your own. The example uses only core `LoadVideo` / `PreviewAny` and the existing KKagent entry/reverse nodes. Video and IMAGE outputs may be connected to core save nodes. No credentials, personal reference images or user workflows are included.
+
+All existing node IDs, input/output order and frontend workflow migration are preserved. The plugin now exposes a V3 `ComfyExtension` / `comfy_entrypoint`. `WEB_DIRECTORY` continues to serve the same frontend.
+
+```bash
+/path/to/comfy-venv/bin/python scripts/check_linux.py --comfy-root /path/to/ComfyUI
+```
+
+Validation and historical limitations are documented in `VALIDATION.md`. New installer checks use local fixtures; they do not establish remote model semantic quality or RunningHub deployment success. Historical lifecycle-suite failures have not been claimed as fixed by this packaging update.
+
+## Registry metadata
+
+`pyproject.toml` lists the same direct dependencies as `requirements.txt`, Linux/ComfyUI compatibility and the target `PublisherId = "tofu952711"`. The existing project identifier is preserved for compatibility. This does not register a publisher or publish a Registry package. A matching publisher account must be claimed/verified before a separate Registry publication. No Registry access token is stored or required for GitHub installation.
+
+References: [Manager installation hooks](https://docs.comfy.org/custom-nodes/backend/manager), [Registry metadata](https://docs.comfy.org/registry/specifications), [V3 registration](https://docs.comfy.org/custom-nodes/v3_migration), [workflow templates](https://docs.comfy.org/custom-nodes/workflow_templates).
 
 ## 参考视频时长
 

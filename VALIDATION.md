@@ -84,3 +84,13 @@ Windows Go与Linux Python两版各通过3项真实FFmpeg专项测试：30.5秒�
 ## 0.2.17 release verification (2026-11-26)
 
 Re-ran 23 runtime tests, 22 frame-selection tests, 3 real-Comfy image-output tests, 3 reference-video-limit tests, 2 process-cleanup tests, fixed reverse configuration checks, frontend widget/link migration checks, all 19 local A/B workflow checks and the Linux environment check. All passed with local mock models and no remote or paid model requests. Historical lifecycle-suite failures remain documented; RunningHub deployment and remote semantic quality are not claimed as verified.
+
+## 0.2.18 ComfyUI installation and registration normalization (2026-11-26)
+
+- 12 installer/path tests passed: fresh shared directories, existing legacy models without duplicate downloads, partial legacy groups, configured extra model paths, explicit environment overrides, safe archive extraction, both archive/model hashes, checksum failure preserving existing files, offline missing assets and mirror fallback.
+- A fresh source-only directory without bundle-manifest.json or vendor resources completed the real install CLI with local model fixtures and system FFmpeg/FFprobe. Its Python environment was unchanged (pip freeze before/after).
+- Real ComfyUI V3 loader and template tests passed (2 checks); all three original KKGO IDs and output counts were preserved. Existing frontend migration checks passed. Template credentials are blank.
+- Re-ran 23 runtime, 22 frame-selection, 3 image-output, 3 reference-limit and 2 process-cleanup tests, fixed reverse configuration checks and all 19 local A/B workflow checks; all passed without paid model calls.
+- Existing real models were verified and reused by the source install hook. The pinned offline wheel lock resolved in a --no-index dry run. The original segmentation archive and its selected ONNX member matched the recorded hashes.
+- Hugging Face was unreachable from this WSL session. The source installer includes SHA256-locked existing GitHub mirrors; full fresh remote model downloading and remote semantic quality are not claimed as verified. Runtime stages never download models or install packages.
+- Registry metadata is prepared with the target publisher ID; publisher ownership/registration and Registry publication remain a separate operation. Historical lifecycle-suite failures are not claimed as fixed by this packaging change.

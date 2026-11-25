@@ -11,3 +11,8 @@ models/sensevoice/model.int8.onnx
 *.download
 vendor/
 bundle-manifest.json
+
+models/speaker-diarization/*.onnx
+*.zip
+*.sha256
+*.partial

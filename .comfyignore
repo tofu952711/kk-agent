@@ -1,0 +1,8 @@
+tests/
+validation-summary.json
+VALIDATION.md
+requirements-offline.txt
+scripts/build_bundle.py
+vendor/
+bundle-manifest.json
+models/**/*.onnx

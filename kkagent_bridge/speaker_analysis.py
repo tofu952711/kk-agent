@@ -22,9 +22,11 @@ SCHEMA_VERSION = 1
 
 
 def model_directory():
-    configured = os.environ.get("KKGO_SPEAKER_MODEL_DIR", "").strip()
-    return (Path(configured).expanduser() if configured else
-            Path(__file__).resolve().parents[1] / "models" / "speaker-diarization")
+    try:
+        from .model_paths import model_directory as resolve
+    except ImportError:  # MCP stdio entry point
+        from model_paths import model_directory as resolve
+    return resolve("speaker-diarization")
 
 
 def settings():

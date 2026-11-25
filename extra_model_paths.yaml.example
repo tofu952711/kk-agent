@@ -1,0 +1,5 @@
+# Merge this section into ComfyUI/extra_model_paths.yaml and edit base_path.
+kkagent:
+  base_path: /path/to/shared/models
+  kkagent_sensevoice: kkagent/sensevoice
+  kkagent_speaker: kkagent/speaker-diarization
