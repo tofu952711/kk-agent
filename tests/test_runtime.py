@@ -32,6 +32,19 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             CALLS.append(body)
         model = body["model"]
+        if model == "empty-stream-three":
+            attempt = sum(call["model"] == model for call in CALLS)
+            delta = {"reasoning_content":"internal-only"} if attempt <= 3 else {"content":"stream-recovered"}
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            events = [{"choices":[{"index":0,"delta":delta,"finish_reason":None}]},
+                      {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+                       "usage":{"prompt_tokens":11,"completion_tokens":7}}]
+            for event in events:
+                self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode())
+            self.wfile.write(b'data: [DONE]\n\n')
+            return
         if model == "blocked":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -55,7 +68,7 @@ class Handler(BaseHTTPRequestHandler):
             text = user["content"][0]["text"]
             content = {"role": "assistant", "content": "echo:" + text}
             finish = "stop"
-            if model in ("tool", "invalid-tool", "duplicate", "unavailable") and len(tools) < (2 if model == "duplicate" else 1):
+            if model in ("tool", "invalid-tool", "duplicate", "unavailable", "tool-empty-once") and len(tools) < (2 if model == "duplicate" else 1):
                 name = "mcp__video__echo" if model != "unavailable" else "mcp__video__set_video_segments"
                 args = {"value": 1 if model == "invalid-tool" else "ok"}
                 content = {"role": "assistant", "content": "", "reasoning_content": "retained reasoning",
@@ -63,6 +76,10 @@ class Handler(BaseHTTPRequestHandler):
                 finish = "tool_calls"
             if model == "empty":
                 content["content"] = ""
+            if model == "tool-empty-once" and tools:
+                attempts = sum(call["model"] == model and any(m["role"] == "tool" for m in call["messages"]) for call in CALLS)
+                if attempts == 1:
+                    content["content"] = ""
             if model == "truncated-output":
                 finish = "length"
             answer = {"choices": [{"message": content, "finish_reason": finish}], "usage": {"prompt_tokens": 11, "completion_tokens": 7}}
@@ -117,10 +134,10 @@ class RuntimeTests(unittest.TestCase):
                 "api_protocol": "openai-completions", "video_system_prompt": "  literal\n规则正文\n", "video_user_prompt": "my task",
                 "video_media_evidence": "separate evidence", "workspace": TEMP.name, "reasoning_effort": "auto", **changes}
 
-    def run_model(self, cfg):
+    def run_model(self, cfg, blocks=None, timeout=5):
         runtime = backend.SDKRuntime(cfg)
         try:
-            return runtime.run("same-logical-session", [{"type": "text", "text": "derived text must not replace user box"}], 5)
+            return runtime.run("same-logical-session", blocks or [{"type": "text", "text": "derived text must not replace user box"}], timeout)
         finally:
             runtime.stop()
 
@@ -191,6 +208,63 @@ class RuntimeTests(unittest.TestCase):
         for model in ("empty", "truncated-output"):
             with self.assertRaises(backend.BridgeError):
                 self.run_model(self.cfg(model=model))
+
+    def test_stream_empty_retries_three_times_with_identical_rules_and_images(self):
+        image = {"type":"image", "mimeType":"image/png",
+                 "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jOioAAAAASUVORK5CYII="}
+        result = self.run_model(self.cfg(model="empty-stream-three", _empty_response_retries=3,
+                                        max_agent_rounds=1), blocks=[image], timeout=15)
+        self.assertEqual(result["text"], "stream-recovered")
+        self.assertEqual(len(CALLS), 4)
+        self.assertTrue(all(body == CALLS[0] for body in CALLS))
+        self.assertTrue(any(b["type"] == "image_url" for b in CALLS[0]["messages"][1]["content"]))
+        self.assertEqual(result["usage"]["output_tokens"], 28)
+        self.assertEqual([e["data"]["attempt"] for e in result["events"] if e["type"] == "step/retry"], [1,2,3])
+        self.assertEqual([r["finish_reason"] for r in result["token_speed"]],
+                         ["empty_response"]*3 + ["completed"])
+
+    def test_empty_retry_exhaustion_stops_after_four_requests(self):
+        with self.assertRaisesRegex(backend.BridgeError, "已额外重试3次仍失败"):
+            self.run_model(self.cfg(model="empty", _empty_response_retries=3), timeout=15)
+        self.assertEqual(len(CALLS), 4)
+        self.assertTrue(all(body == CALLS[0] for body in CALLS))
+
+    def test_empty_retry_preserves_completed_tools(self):
+        with patch.object(backend, "MediaWorker", FakeWorker):
+            result = self.run_model(self.cfg(model="tool-empty-once", media_mcp={"args": []},
+                                            _empty_response_retries=3))
+        self.assertEqual(result["text"], "echo:my task")
+        self.assertEqual(len(CALLS), 3)
+        self.assertEqual(CALLS[1], CALLS[2])
+        self.assertEqual(FakeWorker.called, 1)
+        self.assertEqual(FakeWorker.closed, 1)
+
+    def test_other_stages_keep_empty_response_without_retries(self):
+        with self.assertRaisesRegex(backend.BridgeError, "未自动重跑"):
+            self.run_model(self.cfg(model="empty"))
+        self.assertEqual(len(CALLS), 1)
+
+    def test_retry_backoff_obeys_timeout(self):
+        with self.assertRaisesRegex(backend.BridgeError, "timeout"):
+            self.run_model(self.cfg(model="empty", _empty_response_retries=3), timeout=.2)
+        self.assertEqual(len(CALLS), 1)
+
+    def test_cancel_during_empty_retry_stops_further_requests(self):
+        runtime = backend.SDKRuntime(self.cfg(model="empty", _empty_response_retries=3))
+        def progress(event):
+            if event == "step/retry":
+                runtime.cancel()
+        try:
+            with self.assertRaisesRegex(backend.BridgeError, "cancelled"):
+                runtime.run("cancel-retry", [], 5, progress)
+        finally:
+            runtime.stop()
+        self.assertEqual(len(CALLS), 1)
+
+    def test_output_limit_does_not_trigger_empty_retry(self):
+        with self.assertRaisesRegex(backend.BridgeError, "provider_finish"):
+            self.run_model(self.cfg(model="truncated-output", _empty_response_retries=3))
+        self.assertEqual(len(CALLS), 1)
 
     def test_cancel_closes_a_stalled_stream_without_retry(self):
         runtime = backend.SDKRuntime(self.cfg(model="blocked"))

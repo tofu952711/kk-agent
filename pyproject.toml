@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-kkagent-runninghub-python"
-version = "0.2.6"
+version = "0.2.17"
 description = "Linux KK video reverse nodes with a task-local Python runtime"
 readme = "README.md"
 requires-python = ">=3.10"

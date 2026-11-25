@@ -119,14 +119,10 @@ def iter_chain_b(node, video, routing, api_key, base_url, model, requirement,
         videos, video_record = read_tool_videos(output, report["video"],
             timeout=timeout_s - (time.monotonic() - prepared_at))
         segmented_at = time.monotonic()
-        # The staged node returns here. Its VIDEO buffers can immediately feed
-        # SaveVideo while a separate async node resumes reverse inference.
         stage_records = evidence(output)
         stage_records.update({"chain": "B", "chain_status": "segmented", "ai_called": True,
             "video_outputs": video_record, "reference_image_slots": slots,
             "request_audit_files": {k: str(v) for k, v in audits.items()}})
-        yield ("", json.dumps(stage_records, ensure_ascii=False, indent=2),
-               f"链路B已切出{video_record['count']}段；视频交给SaveVideo，提示词由反推节点输出", *videos)
         # Close the segmentation agent before starting a fresh agent configured
         # with B reverse rules. Its private job files remain alive in this scope.
         segment_bridge.close()
@@ -138,9 +134,10 @@ def iter_chain_b(node, video, routing, api_key, base_url, model, requirement,
             reverse_media += "\n分段阶段返回的依据（分析资料）：\n" + segment_answer["text"]
         if observer:
             observer("segmented", segment_bridge, output)
-        from .b_parallel_reverse import run_parallel_reverse
+        from .b_parallel_reverse import iter_parallel_reverse
+        from .frame_selection import load_output_images
         reverse_started = time.monotonic()
-        text, parallel, reverse_audits = run_parallel_reverse(
+        reverse_stages = iter_parallel_reverse(
             api_key=api_key, base_url=base_url, model=model, timeout_s=timeout_s,
             max_tokens=max_tokens, api_protocol=api_protocol, reasoning_effort=reasoning_effort,
             stream_usage=stream_usage, requirement=requirement, reverse_rules=reverse_rules, review_rules=review_rules, review_ai=review_ai,
@@ -148,6 +145,30 @@ def iter_chain_b(node, video, routing, api_key, base_url, model, requirement,
             segment_answer=segment_answer, video_record=video_record,
             media_mcp=segment_bridge.cfg["media_mcp"], speed=speed,
             configure_stage=configure_stage, audit_dir=audit_dir, observe=observe)
+        try:
+            prepared_frames = next(reverse_stages)
+            frame_manifest = {"upload_reference_slots": slots,
+                "numbering": "每段独立生成：上传图在前，抽帧在后，各段重新编号；output_list_index为总列表位置。",
+                "purpose": "先修改抽帧，再将修改后的图按mention编号作为视频生成参考",
+                "frames": prepared_frames["selected_frames"],
+                "segments": [{k: item[k] for k in ("segment_index", "targets", "reference_bindings",
+                    "joint_clear_frame", "unmet_targets", "opening_frame", "opening_assessment", "shot_analysis", "notes")}
+                    for item in prepared_frames["frame_selections"]]}
+            selected_images = load_output_images(prepared_frames["selected_frames"])
+            manifest_text = json.dumps(frame_manifest, ensure_ascii=False, indent=2)
+            stage_records.update({"chain_status": "frames-ready", "frame_manifest": frame_manifest})
+            print(f"[KKGO] B抽帧已就绪：{len(selected_images)}张图片先交给入口输出，反推尚未开始", flush=True)
+            yield ("", json.dumps(stage_records, ensure_ascii=False, indent=2),
+                   f"链路B已分段并抽出{len(selected_images)}张图；图片可先保存/编辑，提示词由独立反推节点输出",
+                   *videos, selected_images, manifest_text)
+            try:
+                next(reverse_stages)
+            except StopIteration as finished_stage:
+                text, parallel, reverse_audits = finished_stage.value
+            else:
+                raise RuntimeError("B反推阶段未正确结束")
+        finally:
+            reverse_stages.close()
         audits.pop("reverse", None)
         audits.update({key: Path(value) for key, value in reverse_audits.items()})
         finished = time.monotonic()
@@ -184,7 +205,8 @@ def iter_chain_b(node, video, routing, api_key, base_url, model, requirement,
         if observer:
             observer("finished", segment_bridge, output)
         return (text, json.dumps(records, ensure_ascii=False, indent=2),
-                f"ok：链路B已分段{video_record['count']}段，{parallel['agent_count']}个子智能体并发反推，主AI最终复核通过", *videos)
+                f"ok：链路B已分段{video_record['count']}段，{parallel['frame_selector_count']}个抽帧AI选出{len(selected_images)}张可编辑参考图，{parallel['agent_count']}个子智能体反推，最终复核通过",
+                *videos, selected_images, manifest_text)
 
 
 

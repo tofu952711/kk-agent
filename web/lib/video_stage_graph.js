@@ -20,16 +20,20 @@ export function migrateVideoStageGraph(graph) {
       pos: [Number(pos[0]) + width + 40, Number(pos[1]) - 180], size: [340, 150],
       flags: {}, order: (node.order || 0) + 1, mode: 0,
       inputs: [{ name: "context", type: "KKGO_VIDEO_CONTEXT", link: contextLink }],
-      outputs: ["提示词", "分析证据", "状态"].map((name, slot_index) =>
-        ({ name, type: "STRING", links: [], slot_index })),
+      outputs: ["提示词", "分析证据", "状态", "分镜参考图列表", "抽帧信息",
+        ...Array.from({length:5}, (_,i)=>`第${i+1}段参考图`)].map((name, slot_index) =>
+        ({ name, type: slot_index === 3 || slot_index >= 5 ? "IMAGE" : "STRING", links: [], slot_index })),
       properties: { "Node name for S&R": "KKGO_VideoReverse" }, widgets_values: [],
     };
     // Existing text viewers/savers now wait on reverse. VIDEO branches wait
     // only on segmentation, so the executor can save during reverse inference.
     for (const link of graph.links) {
-      if (String(link[1]) !== String(node.id) || link[2] < 0 || link[2] > 2) continue;
+      if (String(link[1]) !== String(node.id)) continue;
+      const targetSlot = link[2] <= 2 ? link[2] : link[2] >= 8 && link[2] <= 14 ? link[2] - 5 : -1;
+      if (targetSlot < 0) continue;
       link[1] = reverseId;
-      reverse.outputs[link[2]].links.push(link[0]);
+      link[2] = targetSlot;
+      reverse.outputs[targetSlot].links.push(link[0]);
     }
     node.type = "KKGO_VideoSegments";
     node.properties ??= {};
@@ -43,6 +47,7 @@ export function migrateVideoStageGraph(graph) {
       const index = node.outputs.length;
       node.outputs.push({ name: `video${index - 2}`, type: "VIDEO", links: [], slot_index: index });
     }
+    node.outputs = node.outputs.slice(0, 8);
     node.outputs[8] = { name: "反推资料", type: "KKGO_VIDEO_CONTEXT", links: [contextLink], slot_index: 8 };
     graph.links.push([contextLink, node.id, 8, reverseId, 0, "KKGO_VIDEO_CONTEXT"]);
     graph.nodes.push(reverse);
@@ -71,6 +76,32 @@ export function migrateVideoStageGraph(graph) {
   if (changed) {
     graph.last_node_id = nodeId;
     graph.last_link_id = linkId;
+  }
+  return changed;
+}
+
+// Existing image savers should wait on frame selection, not final prompt review.
+export function migrateEarlyFrameLinks(graph) {
+  if (!Array.isArray(graph?.nodes) || !Array.isArray(graph.links)) return false;
+  let changed = false;
+  for (const reverse of graph.nodes.filter(n=>n.type === "KKGO_VideoReverse")) {
+    const context = graph.links.find(l=>String(l[3])===String(reverse.id) && l[4]===0 && l[5]==="KKGO_VIDEO_CONTEXT");
+    const entry = context && graph.nodes.find(n=>String(n.id)===String(context[1]) && n.type==="KKGO_VideoSegments");
+    if (!entry) continue;
+    entry.outputs ??= [];
+    for (const link of graph.links) {
+      if (String(link[1])!==String(reverse.id) || link[2]<3 || link[2]>9) continue;
+      const oldSlot=link[2], newSlot=oldSlot+6;
+      const name=oldSlot===3 ? "分镜参考图列表" : oldSlot===4 ? "抽帧信息" : `第${oldSlot-4}段参考图`;
+      entry.outputs[newSlot] ??= {name,type:oldSlot===4 ? "STRING":"IMAGE",links:[],slot_index:newSlot};
+      const old=reverse.outputs?.[oldSlot];
+      if (Array.isArray(old?.links)) old.links=old.links.filter(id=>String(id)!==String(link[0]));
+      const links=(entry.outputs[newSlot].links ??= []);
+      if (!links.includes(link[0])) links.push(link[0]);
+      link[1]=entry.id;
+      link[2]=newSlot;
+      changed=true;
+    }
   }
   return changed;
 }

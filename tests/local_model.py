@@ -46,6 +46,24 @@ class ModelHandler(BaseHTTPRequestHandler):
                                     "本段职责": f"观察第{i}段色块", "重点卖点": "无", "台词推进": "无台词",
                                     "承接与去重": "按原片时间连续"} for i, s in enumerate(segments, 1)]
             answer = json.dumps(common, ensure_ascii=False)
+        elif "你是视频分段后的抽帧AI" in rules:
+            phase = "frame-selection"
+            assert not body.get("tools"), "Frame selector must have no segmentation tools"
+            assert "先修改这些图片" in rules
+            start = text.index("【当前段真实候选帧】\n") + len("【当前段真实候选帧】\n")
+            candidates, _ = json.JSONDecoder().raw_decode(text[start:])
+            segment = int(re.search(r"你是第(\d+)段独立抽帧AI", text).group(1))
+            # Different frame counts exercise per-segment reset and flat-list order.
+            positions = [0]
+            chosen = [candidates[i] for i in positions]
+            answer = json.dumps({"targets": ["主体"], "reference_bindings": [],
+                "shot_analysis":{"mode":"fixed","scene_unchanged":True,"confirmed_changes":[],"reason":"首帧之后单色场景未变"},
+                "selected_frames": [{"candidate_id": c["candidate_id"], "visible_targets": ["主体"],
+                    "clear_targets": ["主体"], "at_edit_boundary": True,
+                    "subject_positions": "色块覆盖画面", "reason": "本地模拟选帧，未做语义质量验证"} for c in chosen],
+                "opening_assessment":[{"candidate_id":candidates[0]["candidate_id"],"clear":True,"reason":"测试首帧清晰"}],
+                "unmet_targets": [], "notes": "离线测试"}, ensure_ascii=False)
+            time.sleep(.25)
         elif rules == "TEST_REVERSE":
             phase = "reverse"
             segment = int(re.search(r"你是第(\d+)段", text).group(1))
@@ -59,7 +77,12 @@ class ModelHandler(BaseHTTPRequestHandler):
                 if dsh_compatible:
                     assert images == INITIAL_IMAGE_COUNTS[('reverse', segment)], "DSH continuation added tool pixels"
                     assert 'Image sha256:' in tool_results[-1]['content'], "Missing DSH attachment description"
-                answer = f"第{segment}段：按实际视频描述色块，局部时间从0开始。"
+                start = text.index("【已导出的抽帧图片与强制引用映射】\n") + len("【已导出的抽帧图片与强制引用映射】\n")
+                frames, _ = json.JSONDecoder().raw_decode(text[start:])
+                assert all(f['segment_index'] == segment for f in frames), 'another segment frame leaked'
+                assert '下一段重新从同样起始编号计算' in text
+                answer = f"第{segment}段：按实际视频描述色块，局部时间从0开始。" + ''.join(
+                    f"本段{f['local_time']}秒参照编辑后的{f['mention']}保持构图。" for f in frames)
             time.sleep(.25)
         elif "你是B链路最终复核主AI" in rules:
             phase = "review"

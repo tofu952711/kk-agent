@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { migrateFullVideoWidgets, migrateFixedReverseInputs, migrateFullVideoImageInputs, migrateFullVideoOutputs, resizeFullVideoInputs } from "./lib/full_video_widgets.js";
-import { migrateVideoStageGraph } from "./lib/video_stage_graph.js";
+import { migrateVideoStageGraph, migrateEarlyFrameLinks } from "./lib/video_stage_graph.js";
 
 app.registerExtension({
   rh: { type: "nodes", nodes: "all" },
@@ -9,8 +9,18 @@ app.registerExtension({
     if (migrateVideoStageGraph(graphData)) {
       console.info("[KKGO] 已拆分B分段与反推连线：标准SaveVideo和独立反推节点可同时执行，保存配置保持不变");
     }
+    migrateEarlyFrameLinks(graphData);
     const removedLinks = new Set();
     for (const node of graphData?.nodes || []) {
+      if (node.type === "KKGO_VideoReverse") {
+        node.outputs ??= [];
+        if (!node.outputs[3]) node.outputs[3] = { name: "分镜参考图列表", type: "IMAGE", links: null, slot_index: 3 };
+        if (!node.outputs[4]) node.outputs[4] = { name: "抽帧信息", type: "STRING", links: null, slot_index: 4 };
+        for (let index = 1; index <= 5; index++) {
+          const slot = index + 4;
+          if (!node.outputs[slot]) node.outputs[slot] = { name: `第${index}段参考图`, type: "IMAGE", links: null, slot_index: slot };
+        }
+      }
       if (node.type === "KKGO_VideoSegments" && (!node.title ||
           ["KKGO 视频分析／B分段（并行入口）", "KKGO 视频分析／B分段（SaveVideo与反推分流）"].includes(node.title))) {
         node.title = "KK agent 视频反推";
@@ -26,12 +36,25 @@ app.registerExtension({
       graphData.links = graphData.links.filter(link => !removedLinks.has(String(Array.isArray(link) ? link[0] : link.id)));
       for (const node of graphData.nodes || []) {
         for (const output of node.outputs || []) {
+          if (!output) continue;
           if (Array.isArray(output.links)) output.links = output.links.filter(id => !removedLinks.has(String(id)));
         }
       }
     }
   },
   beforeRegisterNodeDef(nodeType, nodeData) {
+    if (nodeData.name === "KKGO_VideoReverse") {
+      const original = nodeType.prototype.onConfigure;
+      nodeType.prototype.onConfigure = function () {
+        const result = original?.apply(this, arguments);
+        const minimum = this.computeSize?.();
+        if (minimum && this.size && this.setSize) {
+          this.setSize([Math.max(this.size[0], minimum[0]), Math.max(this.size[1], minimum[1])]);
+        }
+        return result;
+      };
+      return;
+    }
     if (!["KKGO_FullVideoAgent", "KKGO_VideoSegments"].includes(nodeData.name)) return;
     const created = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {

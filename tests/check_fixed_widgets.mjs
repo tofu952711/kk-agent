@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
-import { migrateFullVideoWidgets, resizeFullVideoInputs } from "../web/lib/full_video_widgets.js";
+import { migrateFullVideoWidgets, resizeFullVideoInputs, migrateFullVideoOutputs } from "../web/lib/full_video_widgets.js";
+import { migrateVideoStageGraph, migrateEarlyFrameLinks } from "../web/lib/video_stage_graph.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const old = ["local-placeholder", "https://old.invalid", "old-model", "图1人物、图2商品", 900, 32768, "/old/model", "deepseek-messages",
@@ -57,3 +58,50 @@ assert.deepEqual(migrateFullVideoWidgets(previousFixed), [...expected.slice(0, 9
 const urlWidget = { widgets: [{ name: "review_base_url" }] };
 resizeFullVideoInputs(urlWidget);
 assert.equal(urlWidget.widgets[0].label, "数值2");
+
+const legacyReverse = { nodes: [{id:1,type:"KKGO_VideoReverse",outputs:[0,1,2].map(i=>({name:`text${i}`,type:"STRING",links:[]}))}],links:[] };
+globalThis.fixedReverseExtension.beforeConfigureGraph(legacyReverse);
+assert.equal(legacyReverse.nodes[0].outputs[3].type,"IMAGE");
+assert.equal(legacyReverse.nodes[0].outputs[4].type,"STRING");
+const full = {id:1,type:"KKGO_FullVideoAgent",outputs:Array.from({length:8},(_,slot_index)=>({name:`out${slot_index}`,slot_index,links:[]}))};
+migrateFullVideoOutputs(full);
+assert.equal(full.outputs.length,15);
+assert.equal(full.outputs[8].type,"IMAGE");
+const migrating = {last_node_id:4,last_link_id:3,nodes:[full,
+  {id:2,type:"SaveVideo",inputs:[{name:"video",link:1}],outputs:[],pos:[0,0]},
+  {id:3,type:"SaveImage",inputs:[{name:"images",link:2}],outputs:[]},
+  {id:4,type:"Text",inputs:[{name:"text",link:3}],outputs:[]}],
+  links:[[1,1,3,2,0,"VIDEO"],[2,1,8,3,0,"IMAGE"],[3,1,9,4,0,"STRING"]]};
+assert.equal(migrateVideoStageGraph(migrating),true);
+const newReverse = migrating.nodes.find(n=>n.type==="KKGO_VideoReverse");
+assert.deepEqual(migrating.links.find(l=>l[0]===2).slice(1,3),[newReverse.id,3]);
+assert.deepEqual(migrating.links.find(l=>l[0]===3).slice(1,3),[newReverse.id,4]);
+assert.equal(full.outputs[8].type,"KKGO_VIDEO_CONTEXT");
+assert.equal(full.outputs.length,9);
+assert.equal(migrateVideoStageGraph(migrating),false);
+assert.equal(legacyReverse.nodes[0].outputs.length,10);
+assert.equal(legacyReverse.nodes[0].outputs[5].name,"第1段参考图");
+assert.equal(legacyReverse.nodes[0].outputs[9].name,"第5段参考图");
+assert.equal(newReverse.outputs.length,10);
+const fifthGroupGraph = {last_node_id:3,last_link_id:2,nodes:[
+  {id:1,type:"KKGO_FullVideoAgent",outputs:structuredClone(full.outputs)},
+  {id:2,type:"SaveVideo",inputs:[{name:"video",link:1}],outputs:[],pos:[0,0]},
+  {id:3,type:"SaveImage",inputs:[{name:"images",link:2}],outputs:[]}],
+  links:[[1,1,3,2,0,"VIDEO"],[2,1,14,3,0,"IMAGE"]]};
+assert.equal(migrateVideoStageGraph(fifthGroupGraph),true);
+const fifthReverse = fifthGroupGraph.nodes.find(n=>n.type==="KKGO_VideoReverse");
+assert.deepEqual(fifthGroupGraph.links.find(l=>l[0]===2).slice(1,3),[fifthReverse.id,9]);
+assert.equal(migrateEarlyFrameLinks(fifthGroupGraph),true);
+assert.deepEqual(fifthGroupGraph.links.find(l=>l[0]===2).slice(1,3),[1,15]);
+assert.equal(migrateEarlyFrameLinks(fifthGroupGraph),false);
+assert.equal(fifthGroupGraph.nodes[0].outputs[8].type,"KKGO_VIDEO_CONTEXT");
+function ReverseLayout() {
+  this.size=[340,150];
+  this.computeSize=()=>[300,260];
+  this.setSize=value=>{this.size=value;};
+}
+globalThis.fixedReverseExtension.beforeRegisterNodeDef(ReverseLayout,{name:"KKGO_VideoReverse"});
+const reverseLayout=new ReverseLayout();
+reverseLayout.onConfigure({});
+assert.deepEqual(reverseLayout.size,[340,260]);
+console.log("Passed IMAGE-list port reload and existing VIDEO/context/image/metadata link migration.");

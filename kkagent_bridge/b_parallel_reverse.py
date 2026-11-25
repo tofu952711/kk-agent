@@ -6,10 +6,11 @@ import copy
 import json
 from pathlib import Path
 import re
+import shutil
 import threading
 import time
 
-from .b_segment_media import prepare_segment_bundle
+from .b_segment_media import prepare_segment_bundle, scoped_transcript
 from .media_workflow import evidence as read_evidence
 from .paths import bridge_data_dir
 from .video_preparation import prepared_images, prepared_evidence_text
@@ -18,6 +19,9 @@ from .b_review import REVIEW_RULES, parse_review, apply_review
 from .review_ai import resolve_review_ai
 from .reference_audio import audio_binding_text
 from .b_expression_plan import validate_expression_plan, segment_assignment_text
+from .frame_selection import (FRAME_SELECTION_RULES, prepare_candidates, parse_selection,
+    materialize_selection, assign_image_numbers, selected_image_payloads,
+    frame_reference_text, validate_mentions)
 
 SHARED_FIELDS = ("全片内容概要", "人物与服装", "商品与适配", "场景与光线", "声音与说话人", "跨段衔接")
 COORDINATOR_RULES = """你是B链路的视频反推主AI。视频已经实际分段，不得重新分段。
@@ -133,7 +137,7 @@ def merge_results(results, segments):
     return "\n\n\n\n丨\n\n\n\n".join(parts)
 
 
-def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api_protocol,
+def iter_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api_protocol,
                          reasoning_effort, stream_usage, requirement, reverse_rules,
                          output, report, slots, refs, media_text, segment_answer, video_record,
                          media_mcp, speed, configure_stage, audit_dir, observe=None, observer=None, review_rules=REVIEW_RULES, review_ai=None):
@@ -150,6 +154,7 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
     audits = {}
     artifacts = {}
     results = [None] * len(segments)
+    selections = [None] * len(segments)
     speed.phase = "reverse"
 
     def save(name, value):
@@ -200,14 +205,79 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
             finally:
                 control.remove(bridge)
 
+    def select_frames(index, segment, contract):
+        begin = time.monotonic()
+        directory, candidates, sheets = prepare_candidates(output, report, index, segment, control.check)
+        images = refs + sheets
+        transcript = scoped_transcript(json.loads((output / "transcript.json").read_text(encoding="utf-8")),
+                                       segment["start"], segment["end"])
+        shots = json.loads((output / "shot_candidates.json").read_text(encoding="utf-8"))
+        cut_candidates = [cut for cut in shots.get("candidate_cuts", [])
+                          if segment["start"] < cut["time"] < segment["end"]]
+        task = requirement + f"\n\n你是第{index}段独立抽帧AI；图片将先交给用户修改，再作为视频生成参考。"
+        materials = ("【当前段原片范围】\n" + json.dumps(segment, ensure_ascii=False) +
+            "\n【本次上传参考图插口，附件前部依次对应这些插口】\n" + json.dumps(slots) +
+            "\n其后为候选拼图，标签Cxxx为候选ID；拼图不计入参考图编号。" +
+            "\n【共用设定及素材职责】\n" + json.dumps(contract, ensure_ascii=False) +
+            "\n【用户反推规则资料】\n" + reverse_rules +
+            "\n【本段原声转写：时间为原片秒数，句末需与画面联合判断】\n" + json.dumps(transcript, ensure_ascii=False) +
+            "\n【本段像素切点候选，仅作线索，须以图片确认，不是已确认镜头切换】\n" + json.dumps(cut_candidates, ensure_ascii=False) +
+            "\n【当前段真实候选帧】\n" + json.dumps(candidates, ensure_ascii=False))
+        audit = audit_dir / f"{speed.run_id}-b-frame-selection-{index}.jsonl"
+        # The existing review endpoint is vision-capable. Each selector owns a
+        # fresh session; it shares no conversation with reverse or final review.
+        with workflow_bridge(**reviewer, timeout_s=max(10, int(control.remaining())),
+                             max_tokens=min(max_tokens, 8192), reasoning_effort=reasoning_effort,
+                             stream_usage=stream_usage) as bridge:
+            control.add(bridge)
+            try:
+                configure_stage(bridge, speed, audit, FRAME_SELECTION_RULES, task, materials,
+                                f"frame-selection-{index}", images)
+                bridge.cfg["startup_timeout_s"] = min(30, control.remaining())
+                bridge.cfg["_token_monitor"] = TaggedMonitor(speed, "frame-selector", index)
+                print(f"[KKGO] B抽帧AI {index}/{len(segments)}：{len(candidates)}张候选，选取可编辑参考帧", flush=True)
+                answer = bridge.ask(bridge.session_id(f"chain-b-frame-selection-{index}"), task, images,
+                                    timeout=control.remaining(), on_progress=observe)
+                (directory / "response.json").write_text(json.dumps({"text": answer["text"]}, ensure_ascii=False), encoding="utf-8")
+                try:
+                    selection = parse_selection(answer["text"], candidates, slots)
+                except ValueError as exc:
+                    repair_task = task + f"\n上一稿校验失败：{exc}。重新对照全段候选图片返回完整JSON，在shot_analysis填写scene_unchanged布尔值。首帧之后场景一直未变只选1张段首参考，同场景跳剪或景别变化也不增加图片；只有明确场景切换且提供前后依据才选2—5张，不凑满5张；全部保留清晰度与编辑适用性要求。"
+                    bridge.cfg["video_user_prompt"] = repair_task
+                    answer = bridge.ask(bridge.session_id(f"chain-b-frame-selection-{index}-repair"),
+                        repair_task, images, timeout=control.remaining(), on_progress=observe)
+                    (directory / "response-repair.json").write_text(json.dumps({"text": answer["text"]}, ensure_ascii=False), encoding="utf-8")
+                    selection = parse_selection(answer["text"], candidates, slots)
+                frames = materialize_selection(output.parent / "source-video.mp4", directory,
+                    selection, candidates, segment, index, control.check)
+                frame_directory = result_dir / "frames" / f"segment-{index}"
+                frame_directory.mkdir(parents=True, exist_ok=False)
+                for frame in frames:
+                    destination = frame_directory / Path(frame["file"]).name
+                    shutil.copyfile(frame["file"], destination)
+                    frame["file"] = str(destination)
+                result = {**selection, "frames": frames, "segment_index": index,
+                          "seconds": round(time.monotonic() - begin, 3), "usage": answer.get("usage"),
+                          "audit_file": str(audit), "model": reviewer["model"], "candidate_count": len(candidates)}
+                save(f"frame-selection-{index}.json", result)
+                return result
+            finally:
+                control.remove(bridge)
+
     def child(index, segment, contract):
         begin = time.monotonic()
         control.check()
         directory, text, sheets, scope = prepare_segment_bundle(output, report, slots,
             index, segment, len(segments), contract,
             reference=next((r for r in video_record.get("reference_videos", [])
-                            if r["segment_index"] == index), None))
-        images = refs + sheets
+                            if r["segment_index"] == index), None),
+            selected_frames=selections[index - 1]["frames"])
+        selection = selections[index - 1]
+        frames = selection["frames"]
+        text += frame_reference_text(frames, slots)
+        text += "\n【选帧目标及未覆盖项】\n" + json.dumps({k: selection[k] for k in
+            ("targets", "reference_bindings", "unmet_targets", "joint_clear_frame", "opening_frame", "shot_analysis", "notes")}, ensure_ascii=False)
+        images = refs + selected_image_payloads(frames) + sheets
         audit = audit_dir / f"{speed.run_id}-b-reverse-{index}.jsonl"
         with bridge_context() as bridge:
             control.add(bridge)
@@ -227,18 +297,30 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
                         "规则中的逐段交付在本子任务中仅指这一段，其他段由其他智能体负责。" +
                         segment_assignment_text(contract, index))
                 configure_stage(bridge, speed, audit, reverse_rules, task, text, f"reverse-{index}", images)
+                bridge.cfg["_empty_response_retries"] = 3
                 bridge.cfg["_token_monitor"] = TaggedMonitor(speed, "segment", index)
                 print(f"[KKGO] B子智能体{index}/{len(segments)}开始：原片{segment['start']:g}—{segment['end']:g}秒；{len(images)}张图", flush=True)
                 answer = bridge.ask(bridge.session_id(f"chain-b-reverse-{index}"), task, images,
                                     timeout=control.remaining(), on_progress=observe)
                 if not answer["text"].strip():
                     raise RuntimeError(f"B第{index}段未返回提示词")
+                try:
+                    validate_mentions(answer["text"], frames, slots)
+                except ValueError as exc:
+                    # Ask the same child to repair its prose; never silently
+                    # append an unrelated attachment list to make validation pass.
+                    repair_task = task + f"\n\n上一稿图片引用检查失败：{exc}。请依据抽帧映射重写本段完整提示词，在对应时间与动作正文引用编辑后的图片。"
+                    bridge.cfg["video_user_prompt"] = repair_task
+                    answer = bridge.ask(bridge.session_id(f"chain-b-reverse-{index}"), repair_task, images,
+                                        timeout=control.remaining(), on_progress=observe)
+                    validate_mentions(answer["text"], frames, slots)
                 result = {"segment_index": index, "segment": segment, "text": answer["text"],
                           "seconds": round(time.monotonic() - begin, 3),
                           "usage": answer.get("usage"), "finish_reason": answer.get("finish_reason"),
                           "tool_calls": [e["data"]["name"] for e in answer["events"] if e.get("type") == "tool/call"],
                           "reference_images": len(refs), "video_sheet_images": len(sheets),
                           "audit_file": str(audit), "media_scope": scope,
+                          "selected_frames": frames,
                           "analysis_evidence": read_evidence(directory)}
                 save(f"segment-{index}.json", result)
                 print(f"[KKGO] B子智能体{index}完成：{result['seconds']}秒", flush=True)
@@ -255,10 +337,11 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
                         any(abs(cut - candidate) < .1 for cut in cuts
                             for candidate in s.get("candidate_cut_times", []))]
         review_report = {**report, "sheets": review_sheets}
-        images = refs + prepared_images(output, review_report)
+        frames = [frame for selection in selections for frame in selection["frames"]]
+        images = refs + selected_image_payloads(frames) + prepared_images(output, review_report)
         shots = json.loads((output / "shot_candidates.json").read_text(encoding="utf-8"))
         transcript = json.loads((output / "transcript.json").read_text(encoding="utf-8"))
-        materials = prepared_evidence_text(review_report, shots, transcript, slots)
+        materials = prepared_evidence_text(review_report, shots, transcript, slots, frames)
         payload = {"actual_segments": segments, "shared_context": contract,
                    "reference_videos": video_record.get("reference_videos", []),
                    "note": "按本次审核规定检查全部草稿；检查项与修改范围以审核规定为准。",
@@ -269,7 +352,8 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
                               for r in results]}
         evidence = ("【原始B反推规则，最终正文必须遵守】\n" + reverse_rules +
                     "\n【主AI最终复核输入：全部草稿和共同约束】\n" + json.dumps(payload, ensure_ascii=False) +
-                    "\n【原始素材证据和本次图片编号】\n" + materials)
+                    "\n【原始素材证据和本次图片编号】\n" + materials +
+                    frame_reference_text(frames, slots))
         audit = audit_dir / f"{speed.run_id}-b-review.jsonl"
         task = requirement + "\n\n所有子任务已完成，请逐段复核，按本次内部质检JSON契约返回通过结果或最小修改。"
         with workflow_bridge(**reviewer, timeout_s=max(10, int(control.remaining())),
@@ -285,6 +369,8 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
                 save("review-response.json", {"text": answer["text"], "usage": answer.get("usage")})
                 review = parse_review(answer["text"])
                 revised = apply_review(results, review)
+                for result, selection in zip(revised, selections):
+                    validate_mentions(result["text"], selection["frames"], slots)
                 record = {**review, "seconds": round(time.monotonic() - begin, 3),
                           "usage": answer.get("usage"), "audit_file": str(audit),
                           "agent_role": "main_final_review", "segment_count": len(results),
@@ -307,6 +393,28 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
         for done in await_futures([future], control):
             contract, main_record = done.result()
         audits["coordinator"] = main_record["audit_file"]
+        speed.phase = "frame-selection"
+        status("selecting-frames")
+        selection_started = time.monotonic()
+        frame_futures = {pool.submit(select_frames, i, segment, contract): i
+                         for i, segment in enumerate(segments, 1)}
+        all_futures.extend(frame_futures)
+        for future in await_futures(frame_futures, control):
+            index = frame_futures[future]
+            selections[index - 1] = future.result()
+            audits[f"frame-selection-{index}"] = selections[index - 1]["audit_file"]
+        frames = assign_image_numbers(selections, slots)
+        selection_seconds = round(time.monotonic() - selection_started, 3)
+        for selection in selections:
+            save(f"frame-selection-{selection['segment_index']}.json", selection)
+        save("frame-manifest.json", {"frames": frames, "selections": selections,
+            "upload_reference_slots": slots, "purpose": "edit these frames, then use edited images as video references"})
+        status("frames-ready")
+        yield {"selected_frames": frames, "frame_selections": selections,
+               "frame_selector_count": len(selections), "audits": dict(audits)}
+        # The caller can publish the actual IMAGE ports before resuming inference.
+        control.deadline = time.monotonic() + timeout_s
+        speed.phase = "reverse"
         status("reversing", shared_context_file=str(result_dir / "shared-context.json"))
         parallel_started = time.monotonic()
         futures = {pool.submit(child, i, segment, contract): i for i, segment in enumerate(segments, 1)}
@@ -339,6 +447,8 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
         (result_dir / "prompts.txt").write_text(text, encoding="utf-8")
         record = {"mode": "one_agent_per_materialized_segment", "agent_count": len(segments),
                   "coordinator": main_record, "shared_context": contract,
+                  "frame_selector_count": len(selections), "frame_selections": selections,
+                  "selected_frames": frames, "frame_selection_wall_seconds": selection_seconds,
                   "segments": reviewed_results, "review": review_record, "result_directory": str(result_dir),
                   "parallel_wall_seconds": parallel_seconds,
                   "total_seconds": round(time.monotonic() - started, 3),
@@ -362,3 +472,16 @@ def run_parallel_reverse(*, api_key, base_url, model, timeout_s, max_tokens, api
         raise
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
+
+
+def run_parallel_reverse(**kwargs):
+    stages = iter_parallel_reverse(**kwargs)
+    try:
+        next(stages)
+        try:
+            next(stages)
+        except StopIteration as finished:
+            return finished.value
+        raise RuntimeError("B反推阶段未正确结束")
+    finally:
+        stages.close()

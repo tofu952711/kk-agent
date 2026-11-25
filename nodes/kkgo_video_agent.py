@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import time
 from comfy_api.latest import io
+from comfy_execution.graph_utils import ExecutionBlocker
 from ..kkagent_bridge.workflow import workflow_bridge
 from ..kkagent_bridge.media_workflow import configure_media_config, evidence
 from ..kkagent_bridge.video_preparation import prepare_video, prepared_images, prepared_evidence_text
@@ -15,6 +16,7 @@ from ..kkagent_bridge.media_tools import MediaTools
 from ..kkagent_bridge.duration_routing import route_duration
 from ..kkagent_bridge.b_review import REVIEW_RULES
 from ..kkagent_bridge.a_review import REVIEW_RULES as A_REVIEW_RULES
+from ..kkagent_bridge.frame_selection import group_output_images
 
 
 REVERSE_SETTINGS = {
@@ -93,7 +95,13 @@ class KKGO_FullVideoAgent(io.ComfyNode):
                                     placeholder="填写A链路审核提示词；也可右键转为输入连接文本节点。",
                                     tooltip="A反推完成后独立调用审核AI，按此规则审核并修改完整原片草稿。请保留JSON返回格式说明；整篇草稿段号为1。审核AI使用上方审核区域的数值，B不读取此规则字段。")],
             outputs=[io.String.Output(display_name="提示词"), io.String.Output(display_name="分析证据"), io.String.Output(display_name="状态"),
-                     *[io.Video.Output(display_name=f"video{index}") for index in range(1, 6)]])
+                     *[io.Video.Output(display_name=f"video{index}") for index in range(1, 6)],
+                     io.Image.Output(display_name="分镜参考图列表", is_output_list=True,
+                         tooltip="B分段后AI选出的原视频帧，用于先编辑图片、再作为视频生成参考。列表仅含抽帧，编号映射见抽帧信息。"),
+                     io.String.Output(display_name="抽帧信息"),
+                     *[io.Image.Output(display_name=f"第{index}段参考图", is_output_list=True,
+                         tooltip=f"仅包含video{index}对应段的可编辑抽帧；未分出该段时为空列表。")
+                       for index in range(1, 6)]])
 
     @classmethod
     def fingerprint_inputs(cls, **kwargs):
@@ -133,16 +141,19 @@ class KKGO_FullVideoAgent(io.ComfyNode):
         print(f"[KKGO] 视频{routing['duration_seconds']}秒 → 链路{routing['chain']}", flush=True)
         image_values = (image1, image2, image3, image4, image5, image6, image7, image8, image9, image10)
         if routing["chain"] == "B":
-            return io.NodeOutput(*await cancellable_to_thread(
+            result = await cancellable_to_thread(
                 cls.run_chain_b, video, routing, api_key, base_url, model, requirement,
                 segment_rules_text, chain_b_reverse_rules_text, timeout_s, max_tokens,
                 asr_model_dir, api_protocol, reasoning_effort, stream_usage, keep_audio,
-                _observer, image_values, chain_b_review_rules_text, review_ai, (audio1, audio2, audio3)))
+                _observer, image_values, chain_b_review_rules_text, review_ai, (audio1, audio2, audio3))
+            return io.NodeOutput(*result[:8], result[8] or [ExecutionBlocker(None)], result[9],
+                                 *group_output_images(result[8], result[9]))
         result = await cancellable_to_thread(cls.run_chain_a, video, routing,
             api_key, base_url, model, requirement, rules_text, timeout_s, max_tokens,
             asr_model_dir, api_protocol, reasoning_effort, stream_usage, _observer,
             image_values, (audio1, audio2, audio3), chain_a_review_rules_text, review_ai)
-        return io.NodeOutput(*result)
+        return io.NodeOutput(*result[:8], result[8] or [ExecutionBlocker(None)], result[9],
+                             *group_output_images(result[8], result[9]))
 
     @classmethod
     def prepare_chain_media(cls, cfg, video, routing, asr_model_dir, image_values, audio_values=(None, None, None)):
@@ -312,4 +323,5 @@ class KKGO_FullVideoAgent(io.ComfyNode):
             if observer:
                 observer("finished", bridge, output)
             return (final_text, json.dumps(records, ensure_ascii=False, indent=2), status,
-                    *video_outputs)
+                    *video_outputs, [], json.dumps({"chain": "A", "frames": [],
+                        "note": "抽帧AI是B链路分段后的新增阶段，A链路不执行。"}, ensure_ascii=False))

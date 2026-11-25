@@ -42,7 +42,7 @@ async def main():
     observed = []
     def capture(*args, **kwargs):
         observed.append((args, kwargs))
-        return ("text", "evidence", "status", None, None, None, None, None)
+        return ("text", "evidence", "status", None, None, None, None, None, [], '{"frames":[]}')
     def generate(*args, **kwargs):
         capture(*args, **kwargs)
         yield ("text", "evidence", "status", None, None, None, None, None)

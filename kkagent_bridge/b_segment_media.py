@@ -94,7 +94,8 @@ class SegmentMediaTools(BTailMediaTools):
         raise ValueError("B子智能体只反推既定段落，不能修改已完成的分段")
 
 
-def prepare_segment_bundle(source_output, report, slots, index, segment, count, shared_context, reference=None):
+def prepare_segment_bundle(source_output, report, slots, index, segment, count, shared_context, reference=None,
+                           selected_frames=None):
     """Reuse decoded source frames; recompose mixed sheets at segment boundaries."""
     source_output = Path(source_output)
     output = source_output / "b-reverse" / f"segment-{index}"
@@ -154,7 +155,7 @@ def prepare_segment_bundle(source_output, report, slots, index, segment, count, 
             "不要重复外层‘第几段提示词’标题，程序会按真实段号添加。"
             "\n【所有子任务共享的主AI设定】\n" + json.dumps(shared_context, ensure_ascii=False) +
             "\n共用设定须结合本段证据执行，无法核实的身份或产品参数不能写成确定事实。\n\n" +
-            prepared_evidence_text(scoped_report, shots, transcript, slots))
+            prepared_evidence_text(scoped_report, shots, transcript, slots, selected_frames))
     if reference and reference["trimmed"]:
         text += ("\n\n【本段参考视频长度】交给生成模型的@视频1仅覆盖原片"
                  f"{reference['reference_source_start']:g}—{reference['reference_source_end']:g}秒，最长30秒。"

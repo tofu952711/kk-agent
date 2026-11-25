@@ -99,6 +99,21 @@ export function migrateFullVideoOutputs(node) {
     const slot = index + 2;
     if (!node.outputs[slot]) node.outputs.push({ name: `video${index}`, type: "VIDEO", links: null, slot_index: slot });
   }
+  if (node.type === "KKGO_FullVideoAgent") {
+    if (!node.outputs[8]) node.outputs.push({ name: "分镜参考图列表", type: "IMAGE", links: null, slot_index: 8 });
+    if (!node.outputs[9]) node.outputs.push({ name: "抽帧信息", type: "STRING", links: null, slot_index: 9 });
+    for (let index = 1; index <= 5; index++) {
+      const slot = index + 9;
+      if (!node.outputs[slot]) node.outputs[slot] = { name: `第${index}段参考图`, type: "IMAGE", links: null, slot_index: slot };
+    }
+  }
+  if (node.type === "KKGO_VideoSegments") {
+    node.outputs[8] ??= {name:"反推资料",type:"KKGO_VIDEO_CONTEXT",links:null,slot_index:8};
+    for (const [slot,name,type] of [[9,"分镜参考图列表","IMAGE"],[10,"抽帧信息","STRING"],
+      ...Array.from({length:5},(_,i)=>[i+11,`第${i+1}段参考图`,"IMAGE"])]) {
+      node.outputs[slot] ??= {name,type,links:null,slot_index:slot};
+    }
+  }
 }
 
 // Drop connections to retired settings before the new schema is configured.

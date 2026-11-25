@@ -6,11 +6,13 @@ import threading
 from ..kkagent_bridge.cancellation import CancelScope, cancellable_to_thread
 
 from comfy_api.latest import io
+from comfy_execution.graph_utils import ExecutionBlocker
 from ..kkagent_bridge.chain_b import iter_chain_b
 from ..kkagent_bridge.duration_routing import route_duration
 from ..kkagent_bridge.b_review import REVIEW_RULES
 from ..kkagent_bridge.a_review import REVIEW_RULES as A_REVIEW_RULES
 from .kkgo_video_agent import KKGO_FullVideoAgent, REVERSE_SETTINGS, fixed_review_config
+from ..kkagent_bridge.frame_selection import group_output_images
 
 ChainContext = io.Custom("KKGO_VIDEO_CONTEXT")
 
@@ -84,7 +86,10 @@ class KKGO_VideoSegments(KKGO_FullVideoAgent):
         schema.description = ("不足32秒走A：video1输出最长30秒参考视频，反推仍覆盖完整原片，独立反推与下游打码/保存并行；32至60秒执行B的AI工具分段。"
             "video1—video5连接SaveVideo，反推资料连接KK独立反推节点；两条分支可同时执行。"
             "本节点不自行保存视频，不指定保存目录。原有规则框和接口设置保持独立。")
-        schema.outputs.append(ChainContext.Output(display_name="反推资料"))
+        # Context remains at slot 8; early IMAGE outputs append after it.
+        schema.outputs = schema.outputs[:8] + [ChainContext.Output(display_name="反推资料"),
+            *schema.outputs[8:]]
+        schema.description += "B分段后先抽帧并输出各段参考图，再由独立反推节点继续反推与审核。"
         return schema
 
     @classmethod
@@ -130,7 +135,10 @@ class KKGO_VideoSegments(KKGO_FullVideoAgent):
             scope.cancel()
             scope.close()
             raise
-        return io.NodeOutput(*result, VideoJob(stages=stages, scope=scope))
+        images, manifest = result[8:10] if len(result) >= 10 else ([], '{"frames":[]}')
+        return io.NodeOutput(*result[:8], VideoJob(stages=stages, scope=scope),
+                             images or [ExecutionBlocker(None)], manifest,
+                             *group_output_images(images, manifest))
 
 
 class KKGO_VideoReverse(io.ComfyNode):
@@ -141,7 +149,13 @@ class KKGO_VideoReverse(io.ComfyNode):
             description="接收入口的反推资料。A按A规则反推原片，B按B规则反推分段；两者均可与下游人脸处理及视频保存并行。保存路径由保存节点决定。",
             inputs=[ChainContext.Input("context", display_name="反推资料")],
             outputs=[io.String.Output(display_name="提示词"),io.String.Output(display_name="分析证据"),
-                     io.String.Output(display_name="状态")])
+                     io.String.Output(display_name="状态"),
+                     io.Image.Output(display_name="分镜参考图列表", is_output_list=True,
+                         tooltip="B链路的原视频抽帧；先修改，再按抽帧信息里的编号上传给视频模型。"),
+                     io.String.Output(display_name="抽帧信息"),
+                     *[io.Image.Output(display_name=f"第{index}段参考图", is_output_list=True,
+                         tooltip=f"仅包含video{index}对应段的可编辑抽帧；未分出该段时为空列表。")
+                       for index in range(1, 6)]])
 
     @classmethod
     async def execute(cls, context):
@@ -153,4 +167,6 @@ class KKGO_VideoReverse(io.ComfyNode):
             context.scope.cancel()
             threading.Thread(target=context.close, name="video-job-cleanup", daemon=True).start()
             raise
-        return io.NodeOutput(*result[:3])
+        images, manifest = result[8:10] if len(result) >= 10 else ([], '{"frames":[]}')
+        return io.NodeOutput(*result[:3], images or [ExecutionBlocker(None)], manifest,
+                             *group_output_images(images, manifest))

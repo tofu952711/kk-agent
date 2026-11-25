@@ -207,33 +207,43 @@ class SDKRuntime:
                 validators = {d["name"]: Draft202012Validator(d["inputSchema"]) for d in definitions}
                 completed, tool_count = {}, 0
                 for round_index in range(int(cfg.get("max_agent_rounds", 20))):
-                    request_id = uuid.uuid4().hex
-                    emit("step/start", {"round": round_index + 1, "request_id": request_id})
-                    base = {"request_id": request_id, "model": cfg["model"], "elapsed_seconds": 0, "first_token_seconds": None,
-                            "output_tokens": None, "average_tps": None, "finish_reason": "", "usage": {}}
-                    monitor({**base, "kind": "start"})
-                    began = time.monotonic()
-                    try:
-                        turn = await next_turn(client, cfg, rules, history, definitions)
-                    except BaseException as exc:
-                        reason = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
-                        monitor({**base, "kind": "end", "elapsed_seconds": time.monotonic() - began, "finish_reason": reason})
-                        raise
-                    usage, elapsed = turn["usage"], turn["elapsed"]
-                    record = {**base, "kind": "end", "elapsed_seconds": elapsed, "first_token_seconds": turn["first_token"],
-                              "output_tokens": usage["output_tokens"] if usage["known"] else None,
-                              "average_tps": usage["output_tokens"] / elapsed if usage["known"] and elapsed else None,
-                              "finish_reason": turn["finish_reason"], "usage": usage}
-                    monitor(record)
-                    records.append(record)
-                    totals["known"] = totals["known"] and usage["known"]
-                    for field in ("input_tokens", "output_tokens", "cached_tokens", "total_tokens"):
-                        totals[field] += usage[field]
-                    emit("assistant/message", {"usage": usage, "tool_count": len(turn["calls"]), "text_characters": len(turn["text"])})
+                    retry_limit = int(cfg.get("_empty_response_retries", 0))
+                    for empty_attempt in range(retry_limit + 1):
+                        request_id = uuid.uuid4().hex
+                        emit("step/start", {"round": round_index + 1, "request_id": request_id})
+                        base = {"request_id": request_id, "model": cfg["model"], "elapsed_seconds": 0, "first_token_seconds": None,
+                                "output_tokens": None, "average_tps": None, "finish_reason": "", "usage": {}}
+                        monitor({**base, "kind": "start"})
+                        began = time.monotonic()
+                        try:
+                            turn = await next_turn(client, cfg, rules, history, definitions)
+                        except BaseException as exc:
+                            reason = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+                            monitor({**base, "kind": "end", "elapsed_seconds": time.monotonic() - began, "finish_reason": reason})
+                            raise
+                        usage, elapsed = turn["usage"], turn["elapsed"]
+                        empty = not turn["calls"] and not turn["text"].strip()
+                        record = {**base, "kind": "end", "elapsed_seconds": elapsed, "first_token_seconds": turn["first_token"],
+                                  "output_tokens": usage["output_tokens"] if usage["known"] else None,
+                                  "average_tps": usage["output_tokens"] / elapsed if usage["known"] and elapsed else None,
+                                  "finish_reason": "empty_response" if empty else turn["finish_reason"], "usage": usage}
+                        monitor(record)
+                        records.append(record)
+                        totals["known"] = totals["known"] and usage["known"]
+                        for field in ("input_tokens", "output_tokens", "cached_tokens", "total_tokens"):
+                            totals[field] += usage[field]
+                        emit("assistant/message", {"usage": usage, "tool_count": len(turn["calls"]), "text_characters": len(turn["text"])})
+                        if not empty:
+                            break
+                        if empty_attempt == retry_limit:
+                            message = f"模型返回空白正文，已额外重试{retry_limit}次仍失败" if retry_limit else "模型返回空白正文，未自动重跑"
+                            raise BridgeError("empty_response", message)
+                        # Resend the same request; do not append the empty reply or repeat completed tools.
+                        print(f"[KKGO] 子智能体返回空白正文，保持原规则和素材重试 {empty_attempt + 1}/{retry_limit}", flush=True)
+                        emit("step/retry", {"reason": "empty_response", "attempt": empty_attempt + 1, "limit": retry_limit})
+                        await asyncio.sleep(2 ** empty_attempt)
                     history.append({"role": "assistant", "raw": turn["raw"]})
                     if not turn["calls"]:
-                        if not turn["text"].strip():
-                            raise BridgeError("empty_response", "模型返回空白正文，未自动重跑")
                         self._sessions[session] = history
                         emit("turn/end", {"finish_reason": "completed"})
                         self.last_diagnostics = {"backend": "python", "finish_reason": "completed", "token_speed": records}

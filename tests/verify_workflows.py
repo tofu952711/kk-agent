@@ -34,6 +34,7 @@ def main():
     spec.loader.exec_module(mock)
     a_started,b_child_started=threading.Event(),threading.Event()
     calls,errors=[],[]
+    empty_retry_payloads=[]
     lock=threading.Lock()
     class Handler(mock.ModelHandler):
         def do_POST(self):
@@ -46,9 +47,11 @@ def main():
             initial = not any(m['role'] in ['tool', 'assistant'] for m in body['messages'])
             tools = [t['function']['name'] for t in body.get('tools', [])]
             record = dict(chain=chain, stage=('segment' if rules == 'TEST_SEGMENT' else 'child' if rules == 'TEST_REVERSE'
+                          else 'frame-selection' if '你是视频分段后的抽帧AI' in rules
                           else 'coordinator' if '你是B链路的视频反推主AI' in rules else 'review' if '你是B链路最终复核主AI' in rules
                           else 'a-review' if '你是A链路最终审核AI' in rules else 'A'),
                           initial=initial, started=time.time(), tools=tools,
+                          segment_index=2 if '你是第2段反推子智能体' in task else 1 if '你是第1段反推子智能体' in task else None,
                           user_messages=sum(m['role'] == 'user' for m in body['messages']))
             with lock:
                 calls.append(record)
@@ -64,6 +67,21 @@ def main():
                 if rules == 'TEST_REVERSE' and initial:
                     assert a_started.is_set(), 'A/B overlap was not exercised'
                     b_child_started.set()
+                if record['stage'] == 'child' and record['segment_index'] == 2 and not initial:
+                    with lock:
+                        if len(empty_retry_payloads) < 4:
+                            empty_retry_payloads.append(raw)
+                            empty = len(empty_retry_payloads) <= 3
+                        else:
+                            empty = False
+                    if empty:
+                        self.send_response(200)
+                        self.send_header('Content-Type','text/event-stream')
+                        self.end_headers()
+                        event = {'choices':[{'index':0,'delta':{'reasoning_content':'offline-empty-output'},'finish_reason':'stop'}],
+                                 'usage':{'prompt_tokens':100,'completion_tokens':20}}
+                        self.wfile.write(('data: '+json.dumps(event)+'\n\ndata: [DONE]\n\n').encode())
+                        return
                 if record['stage'] == 'a-review':
                     assert len(body['messages']) == 2, 'A review reused the draft or previous task history'
                     response = {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({
@@ -131,11 +149,19 @@ def main():
                                             chain_b_review_rules_text=None, **common)
                 assert entry[3] is small and all(isinstance(entry[i], ExecutionBlocker) for i in range(4, 8))
             else:
+                import torch
                 entry = await BNode.execute(large, requirement='AB_PROBE_B', rules_text=None,
                                             segment_rules_text='TEST_SEGMENT', chain_b_reverse_rules_text='TEST_REVERSE',
+                                            image1=torch.zeros(1,32,32,3), image2=torch.ones(1,32,32,3),
+                                            image3=torch.full((1,32,32,3),.5),
                                             chain_a_review_rules_text=None, **common)
                 assert not isinstance(entry[3], ExecutionBlocker) and not isinstance(entry[4], ExecutionBlocker)
                 assert all(isinstance(entry[i], ExecutionBlocker) for i in range(5, 8))
+                assert len(entry[9]) == 2, 'entry did not publish selected images before reverse'
+                assert len(json.loads(entry[10])['frames']) == 2
+                assert [len(entry[i]) for i in (11,12)] == [1,1]
+                assert len([c for c in calls if c['stage']=='frame-selection']) == 2
+                assert not [c for c in calls if c['stage'] in ('child','review')], 'reverse started before early IMAGE output'
             # A job consumed twice must finish once, then return the cached result.
             job = entry[8]
             first, repeated = await asyncio.gather(asyncio.to_thread(job.finish), asyncio.to_thread(job.finish))
@@ -150,6 +176,24 @@ def main():
             else:
                 assert evidence['video_outputs']['count'] == 2
                 assert evidence['parallel_reverse']['review']['status'] == 'corrected'
+                assert evidence['parallel_reverse']['frame_selector_count'] == 2
+                assert len(first[8]) == 2
+                manifest = json.loads(first[9])
+                frames = manifest['frames']
+                assert [f['segment_index'] for f in frames] == [1,2]
+                assert [f['image_number'] for f in frames] == [4,4]
+                assert [f['output_list_index'] for f in frames] == [1,2]
+                assert frames[0]['local_time'] == 0. and frames[1]['local_time'] == 0.
+                assert [f['reference_role'] for f in frames] == ['段首','段首']
+                assert all(s['opening_frame']['first_decoded_frame_used'] for s in manifest['segments'])
+                for image, frame in zip(first[8], frames):
+                    assert tuple(image.shape) == (1,128,128,3) and image.dtype == torch.float32
+                    assert float(image.min()) >= 0 and float(image.max()) <= 1
+                    assert Path(frame['file']).is_file(), 'selected images disappeared during job cleanup'
+                assert all(f['local_time'] == round(f['source_time'] - (0 if f['segment_index'] == 1 else 16),6) for f in frames)
+                parts = first[0].split('丨')
+                assert '@图片4' in parts[0] and '@图片5' not in parts[0]
+                assert '@图片4' in parts[1] and '@图片5' not in parts[1]
             return dict(chain=chain, text=first[0], run_id=evidence['token_speed']['run_id'])
 
         async def together():
@@ -164,6 +208,14 @@ def main():
         assert len([c for c in calls if c['stage'] == 'A']) == 2, 'VideoJob duplicate executed A twice'
         assert len([c for c in calls if c['stage'] == 'a-review']) == 1, 'VideoJob repeated A review'
         assert len([c for c in calls if c['stage'] == 'review']) == 1, 'VideoJob duplicate executed B twice'
+        assert len([c for c in calls if c['stage'] == 'frame-selection']) == 2
+        assert len(empty_retry_payloads) == 4
+        assert all(raw == empty_retry_payloads[0] for raw in empty_retry_payloads)
+        assert len([c for c in calls if c['stage'] == 'child' and c['segment_index'] == 1]) == 2
+        report['checks']['empty_second_child_retries_three_times_with_identical_request'] = True
+        report['checks']['successful_first_child_not_rerun'] = True
+        selection_intervals = [c for c in calls if c['stage'] == 'frame-selection']
+        assert max(c['ended'] for c in selection_intervals) <= min(c['started'] for c in child_intervals)
         report['checks'].update(concurrent_A_B_model_requests_overlap=True,
                                 no_cross_chain_user_or_tool_context=True,
                                 A_passthrough_and_B_split_video_outputs=True,
@@ -171,7 +223,11 @@ def main():
                                 B_ignores_A_rules=True, B_children_and_reviewer_completed=True,
                                 VideoJob_double_consumption_idempotent=True,
                                 A_cleanup_does_not_cancel_B_task=True,
-                                monitoring_run_ids_separate=True)
+                                monitoring_run_ids_separate=True,
+                                one_selector_per_segment_before_reverse=True,
+                                reference_numbering_resets_after_three_user_images=True,
+                                real_RGB_IMAGE_list_and_persisted_PNGs=True,
+                                selected_image_mentions_survive_final_review=True)
 
         report['checks']['all_model_connections_and_workers_closed'] = backend.runtime_status()['active_turns'] == 0 and backend.runtime_status()['media_workers'] == 0
         assert report['checks']['all_model_connections_and_workers_closed'], backend.runtime_status()

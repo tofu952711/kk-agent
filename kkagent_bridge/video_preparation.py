@@ -149,16 +149,18 @@ def prepared_images(output: Path, report):
     return images
 
 
-def prepared_evidence_text(report, shots, transcript, image_slots=None):
+def prepared_evidence_text(report, shots, transcript, image_slots=None, selected_frames=None):
     """Default source evidence shared by every chain; no creative/output rules."""
     slots = list(image_slots or [])
+    selected_frames = list(selected_frames or [])
+    sheet_start = len(slots) + len(selected_frames) + 1
     mapping = [f"随请求第{index}张图 = image{slot} = @图片{slot}"
                for index, slot in enumerate(slots, 1)]
     text = [
         "本次素材：@视频1为原视频。图片是通用参考，职责由用户要求及系统提示词确定，不预设人物或商品。",
         "已连接图片插口：" + ("、".join(f"image{slot}" for slot in slots) or "无"),
         "图片对应关系：" + ("；".join(mapping) or "未提供独立参考图，不虚构图片条目。"),
-        f"独立参考图之后，从随请求第{len(slots) + 1}张开始均为@视频1带时间标签的抽帧拼图，不属于image1—image10。",
+        f"从随请求第{sheet_start}张开始均为@视频1带时间标签的证据拼图，不占生成提示词的@图片编号。",
         "本地预处理证据如下；可用get_frames按需查看其他时间或单帧大图。",
         "视频信息：" + json.dumps(report["video"], ensure_ascii=False),
         "采样覆盖：" + json.dumps(report["coverage"], ensure_ascii=False), report["note"],
@@ -167,7 +169,10 @@ def prepared_evidence_text(report, shots, transcript, image_slots=None):
         "声音变化复核证据：" + json.dumps(report.get("voice_evidence", {}), ensure_ascii=False),
         audio_binding_text(report),
     ]
-    for index, sheet in enumerate(report["sheets"], len(slots) + 1):
+    for attachment, frame in enumerate(selected_frames, len(slots) + 1):
+        text.append(f"随请求第{attachment}张图：第{frame['segment_index']}段可编辑分镜参考帧，"
+                    f"该段独立生成时使用{frame['mention']}；原片{frame['source_time']}秒，本段{frame['local_time']}秒。")
+    for index, sheet in enumerate(report["sheets"], sheet_start):
         text.append(f"随请求第{index}张图：{sheet['kind']}；{sheet['layout']}；原视频秒数：" +
                     json.dumps(sheet["actual_times"]))
         if sheet.get("row_layout"):
