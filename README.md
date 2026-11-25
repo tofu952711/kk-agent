@@ -29,7 +29,7 @@ ComfyUI/models/kkagent/
   speaker-diarization/speaker_embedding.onnx
 ```
 
-The installer verifies SHA256 for all assets, including the original segmentation archive before extracting its single model file. Downloads are only performed by the installation hook, never during node import or inference. Source release ZIPs do not include model weights. Two historical speaker model files remain tracked in Git to avoid deleting existing installations' models on `git pull`; they are not included in the new source ZIP. They can be reused without downloading again.
+The installer verifies SHA256 for all assets, including the original segmentation archive before extracting its single model file. Downloads are only performed by the installation hook, never during node import or inference. Source release ZIPs do not include model weights. A separate `model.int8.onnx` attachment on the 0.2.19 release supplies the checksum-locked SenseVoice mirror; it is only needed if the original host is unavailable. Two historical speaker model files remain tracked in Git to avoid deleting existing installations' models on `git pull`; they are not included in the new source ZIP. They can be reused without downloading again.
 
 Model directory priority: explicit `KKGO_ASR_MODEL_DIR` / `KKGO_SPEAKER_MODEL_DIR`, complete configured ComfyUI shared model folders, then complete legacy plugin-local `models/sensevoice` / `models/speaker-diarization` folders. A complete old installation continues using its existing models without moving, deleting or duplicating them. Partial legacy groups can be copied into one complete shared group; differing existing files are never silently overwritten.
 

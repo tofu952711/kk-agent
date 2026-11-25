@@ -16,7 +16,7 @@ REVISION = "2365baeacb507f821a0c8120fcee3d484dba7a07"
 BASE = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/" + REVISION
 ASSETS = [
     {"group": "sensevoice", "name": "model.int8.onnx", "url": BASE + "/model.int8.onnx",
-     "mirrors": ["https://github.com/tofu952711/kk-agent/releases/download/models-v1/model.int8.onnx"],
+     "mirrors": ["https://github.com/tofu952711/kk-agent/releases/download/v0.2.19/model.int8.onnx"],
      "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"},
     {"group": "sensevoice", "name": "tokens.txt", "url": BASE + "/tokens.txt",
      "mirrors": ["https://raw.githubusercontent.com/tofu952711/kk-agent/26bff3a998be54d0700be99fee76dcf27081d441/models/sensevoice/tokens.txt"],
