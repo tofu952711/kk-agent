@@ -191,6 +191,39 @@ class SelectionContractTests(unittest.TestCase):
 
 
 class RealMediaTests(unittest.TestCase):
+    def test_segment_boundary_tolerance_preserves_selected_frame(self):
+        with tempfile.TemporaryDirectory(prefix="kk-frame-boundary-") as temporary:
+            root = Path(temporary)
+            source = root / "source.mp4"
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                "testsrc2=size=64x64:rate=24:duration=2", "-c:v", "libx264", "-threads", "1",
+                str(source)], check=True)
+            stamp = 31 / 24
+            target = round(stamp, 6)
+            candidates = [{"candidate_id": "C001", "source_time": target}]
+            selection = {"selected_frames": [{"candidate_id": "C001"}]}
+            cases = [
+                ("rounded_start", {"start": target, "end": 2.0}, True),
+                ("near_start", {"start": stamp + 0.499, "end": 2.0}, True),
+                ("near_end", {"start": 0.0, "end": stamp - 0.499}, True),
+                ("outside_start", {"start": stamp + 0.501, "end": 2.0}, False),
+                ("outside_end", {"start": 0.0, "end": stamp - 0.501}, False),
+            ]
+            for name, segment, accepted in cases:
+                with self.subTest(name=name):
+                    directory = root / name
+                    directory.mkdir()
+                    if accepted:
+                        result = frames.materialize_selection(source, directory, selection, candidates, segment, 2)
+                        self.assertEqual(result[0]["source_time"], target)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "不一致"):
+                            frames.materialize_selection(source, directory, selection, candidates, segment, 2)
+            # The relaxed segment boundary must not substitute a nearby video frame.
+            with self.assertRaisesRegex(ValueError, "不一致"):
+                frames.materialize_selection(source, root, selection,
+                    [{"candidate_id": "C001", "source_time": stamp + 0.01}], {"start": 0.0, "end": 2.0}, 2)
+
     def check_video(self, rate, offset=False, anamorphic=False):
         from PIL import Image
         import numpy as np

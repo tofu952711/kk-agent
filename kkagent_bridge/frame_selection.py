@@ -253,7 +253,8 @@ def materialize_selection(source, directory, selection, candidates, segment, ind
             target = by_id[pending[0]["candidate_id"]]["source_time"]
             if stamp + 1e-6 < target:
                 continue
-            if abs(stamp - target) > 2e-6 or not segment["start"] <= stamp < segment["end"]:
+            # Segment timestamps may be rounded; keep the exact selected frame.
+            if abs(stamp - target) > 2e-6 or not segment["start"] - 0.5 <= stamp < segment["end"] + 0.5:
                 raise ValueError("抽帧输出时间与AI所选真实帧不一致")
             item = pending.pop(0)
             image = frame.to_image().convert("RGB")

@@ -94,3 +94,7 @@ Re-ran 23 runtime tests, 22 frame-selection tests, 3 real-Comfy image-output tes
 - Existing real models were verified and reused by the source install hook. The pinned offline wheel lock resolved in a --no-index dry run. The original segmentation archive and its selected ONNX member matched the recorded hashes.
 - Hugging Face was unreachable from this WSL session. The source installer includes SHA256-locked existing GitHub mirrors; full fresh remote model downloading and remote semantic quality are not claimed as verified. Runtime stages never download models or install packages.
 - Registry metadata is prepared with the target publisher ID; publisher ownership/registration and Registry publication remain a separate operation. Historical lifecycle-suite failures are not claimed as fixed by this packaging change.
+
+## 0.2.19 frame export boundary tolerance (2026-11-26)
+
+All 23 frame-selection tests passed. The real 24-fps regression accepts 0.499-second segment-boundary differences and rejects 0.501-second differences on both ends, while still rejecting a candidate timestamp with no matching decoded frame. The original failing source frame at 24.291667 seconds was exported successfully at 1080x1440 in an offline reproduction, without paid API calls. Only the segment-boundary test is relaxed; original selected-frame identity and source PTS matching are preserved.

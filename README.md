@@ -13,7 +13,7 @@ git clone https://github.com/tofu952711/kk-agent.git ComfyUI-KKAgent-RunningHub
 /path/to/comfy-venv/bin/python ComfyUI-KKAgent-RunningHub/install.py --comfy-root /path/to/ComfyUI
 ```
 
-Alternatively unzip the `kk-agent-runninghub-0.2.18-source-linux.zip` release into `custom_nodes/`. In the Manager git-URL installation flow, Manager installs `requirements.txt` and runs the `install.py` hook. The source hook does not run pip, does not require a bundle manifest or local wheels, and does not replace PyTorch/CUDA. It checks prerequisites, verifies existing model hashes and downloads only missing model assets from their original sources or SHA256-locked existing GitHub mirrors.
+Alternatively unzip the `kk-agent-runninghub-0.2.19-source-linux.zip` release into `custom_nodes/`. In the Manager git-URL installation flow, Manager installs `requirements.txt` and runs the `install.py` hook. The source hook does not run pip, does not require a bundle manifest or local wheels, and does not replace PyTorch/CUDA. It checks prerequisites, verifies existing model hashes and downloads only missing model assets from their original sources or SHA256-locked existing GitHub mirrors.
 
 Install system FFmpeg/FFprobe before installing models. Existing bundled tools remain supported; explicit `KKGO_FFMPEG` and `KKGO_FFPROBE` executable paths take priority. There is no automatic apt/sudo or runtime package installation. Restart ComfyUI and refresh the webpage after installation/update.
 
@@ -123,3 +123,7 @@ B入口先完成实际分段、共用规划及选帧，再返回视频和图片�
 ## 0.2.17：反推子智能体空正文重试
 
 B链路反推子智能体收到无工具调用且正文为空的正常接口响应时，额外重试最多3次，即首次加3次重试共最多4次。每次原样保留系统规则、用户要求、参考图、证据和已经完成的工具上下文，不追加空回复、不重跑其他已完成分段；重试间隔1/2/4秒。各次用量均累计，空回复在速度记录中标为`empty_response`，控制台显示重试次数。重试仍受本任务剩余超时和取消控制；3次后仍为空则明确报错。现有HTTP错误重试和图片引用补正规则继续保留。
+
+## 0.2.19: frame export boundary tolerance
+
+Selected reference frames may fall within 0.5 seconds of the recorded segment boundary without failing export. The candidate-to-source-frame PTS check remains unchanged: no nearest-frame substitution, time shifting, resampling or trimming changes. This fixes false rejection when a segment start rounded to six decimals is slightly later than the same decoded frame's PTS.
