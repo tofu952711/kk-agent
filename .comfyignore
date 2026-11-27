@@ -6,3 +6,5 @@ scripts/build_bundle.py
 vendor/
 bundle-manifest.json
 models/**/*.onnx
+
+scripts/check_package.py

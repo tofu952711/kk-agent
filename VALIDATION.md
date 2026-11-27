@@ -109,3 +109,18 @@ All 23 frame-selection tests passed. The real 24-fps regression accepts 0.499-se
 - Asynchronous tests use the actual ComfyUI scheduler and core video/image savers with event-controlled local AI substitutes. They cover both 32-second and 17-second modes, both chains and either output scheduling order; they assert video saving overlaps background work and frame saving does not wait for final prompt review.
 - No paid model API was called by these release checks. Installer downloads were local test fixtures. Remote semantic quality and RunningHub deployment are not established by these tests.
 - The source ZIP excludes weights, wheels, runtime data, credentials and media. Historical tracked model files and checksum-locked model mirror links are unchanged.
+
+
+## 0.2.21 official repository contract (2026-11-27)
+
+Reviewed the current ComfyUI documentation for Registry metadata, V3 registration, WEB_DIRECTORY/docs help, example_workflows and .comfyignore. Added per-node help pages, metadata documentation/issue URLs and the LICENSE file reference. The immutable package and node IDs are preserved.
+
+`python scripts/check_package.py` passed: metadata fields/name/version, dependency consistency, V3 entry point, four node help files, example credentials, model exclusions and prohibited eval/exec checks. The real V3 loader/template registration suite passed again. Runtime node behavior is unchanged from 0.2.20; its 78 tests and JavaScript checks remain the execution validation for this revision. CI adds the package contract check alongside the Python 3.10/3.12/3.13 installer matrix.
+
+Official references:
+- https://docs.comfy.org/registry/specifications
+- https://docs.comfy.org/custom-nodes/v3_migration
+- https://docs.comfy.org/custom-nodes/help_page
+- https://docs.comfy.org/custom-nodes/workflow_templates
+- https://docs.comfy.org/registry/publishing
+- https://docs.comfy.org/registry/standards

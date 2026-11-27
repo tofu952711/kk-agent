@@ -1,6 +1,16 @@
 # kk agent 2
 
 
+## 0.2.21：官方规范仓库与帮助文档
+
+按 ComfyUI 官方的 [V3注册](https://docs.comfy.org/custom-nodes/v3_migration)、[元数据规范](https://docs.comfy.org/registry/specifications)、[节点帮助](https://docs.comfy.org/custom-nodes/help_page)、[示例工作流](https://docs.comfy.org/custom-nodes/workflow_templates) 和 [发布文件排除规则](https://docs.comfy.org/registry/publishing#exclude-files-with-comfyignore)复核。
+
+- 根目录提供 `pyproject.toml`、`requirements.txt`、`LICENSE`、`README.md` 和 `comfy_entrypoint()`。
+- 节点帮助位于 `WEB_DIRECTORY/docs/<节点ID>.md`，可在ComfyUI节点帮助面板查看；模板位于 `example_workflows/`。
+- 明确Python、ComfyUI和Linux兼容范围，保留原包标识和节点ID以兼容升级；显示名为kk agent 2。
+- Registry包通过 `.comfyignore` 排除测试、模型权重和开发文件；GitHub源码发布包不含权重、密钥和本机数据。
+- CI检查元数据、依赖一致性、帮助与模板文件，以及运行代码中禁止的eval/exec。运行时不执行pip安装，不修改其他节点或ComfyUI核心文件。
+
 ## 0.2.20：kk agent 2
 
 - 插件、节点及分类统一显示为 **kk agent 2**。继续使用原仓库、安装目录和 `KKGO_*` 节点 ID，旧工作流可升级。
@@ -26,7 +36,7 @@ git clone https://github.com/tofu952711/kk-agent.git ComfyUI-KKAgent-RunningHub
 /path/to/comfy-venv/bin/python ComfyUI-KKAgent-RunningHub/install.py --comfy-root /path/to/ComfyUI
 ```
 
-Alternatively unzip the `kk-agent-2-0.2.20-source-linux.zip` release into `custom_nodes/`. In the Manager git-URL installation flow, Manager installs `requirements.txt` and runs the `install.py` hook. The source hook does not run pip, does not require a bundle manifest or local wheels, and does not replace PyTorch/CUDA. It checks prerequisites, verifies existing model hashes and downloads only missing model assets from their original sources or SHA256-locked existing GitHub mirrors.
+Alternatively unzip the `kk-agent-2-0.2.21-source-linux.zip` release into `custom_nodes/`. In the Manager git-URL installation flow, Manager installs `requirements.txt` and runs the `install.py` hook. The source hook does not run pip, does not require a bundle manifest or local wheels, and does not replace PyTorch/CUDA. It checks prerequisites, verifies existing model hashes and downloads only missing model assets from their original sources or SHA256-locked existing GitHub mirrors.
 
 Install system FFmpeg/FFprobe before installing models. Existing bundled tools remain supported; explicit `KKGO_FFMPEG` and `KKGO_FFPROBE` executable paths take priority. There is no automatic apt/sudo or runtime package installation. Restart ComfyUI and refresh the webpage after installation/update.
 
