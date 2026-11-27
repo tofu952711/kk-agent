@@ -3,42 +3,99 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from ..kkagent_bridge.cancellation import CancelScope, cancellable_to_thread
+from contextvars import copy_context
+from ..kkagent_bridge.cancellation import CancelScope, cancellable_to_thread, bind_scope
 
-from comfy_api.latest import io
+from comfy_api.latest import io, ComfyAPI, Caching
 from comfy_execution.graph_utils import ExecutionBlocker
 from ..kkagent_bridge.chain_b import iter_chain_b
-from ..kkagent_bridge.duration_routing import route_duration
+from ..kkagent_bridge.duration_routing import route_duration, DEFAULT_DURATION_MODE
 from ..kkagent_bridge.b_review import REVIEW_RULES
 from ..kkagent_bridge.a_review import REVIEW_RULES as A_REVIEW_RULES
-from .kkgo_video_agent import KKGO_FullVideoAgent, REVERSE_SETTINGS, fixed_review_config
+from .kkgo_video_agent import KKGO_FullVideoAgent, REVERSE_SETTINGS, fixed_review_config, resolve_reverse_base_url, resolve_model_name
 from ..kkagent_bridge.frame_selection import group_output_images
 
 ChainContext = io.Custom("KKGO_VIDEO_CONTEXT")
 
 
 class VideoJob:
-    """Opaque in-memory job; never serialize prompts, credentials or generator."""
-    def __init__(self, stages=None, result=None, scope=None):
+    """Task-owned generator shared by video, frame and prompt branches."""
+    def __init__(self, stages=None, result=None, scope=None, frames_pending=False):
         self.scope = scope or CancelScope()
         self._stages = stages
         self._result = result
+        self._prepared = result
+        self._frames = None
+        self._frames_pending = frames_pending
+        self._frames_ready = threading.Event()
         self._error = None
         self._lock = threading.Lock()
+        self._worker = None
 
     def __repr__(self):
         return "<KKGO video job>"
 
-    def finish(self):
+    def prepare(self):
+        with self._lock:
+            self.scope.check()
+            try:
+                self._prepared = next(self._stages)
+                if not self._frames_pending:
+                    self._frames = self._prepared
+                    self._frames_ready.set()
+                return self._prepared
+            except BaseException as exc:
+                self._error = exc
+                self._release()
+                raise
+
+    def _release(self):
+        if self._stages is not None:
+            self._stages.close()
+            self._stages = None
+        self.scope.close()
+        self._frames_ready.set()
+
+    def _select_frames(self):
+        if not self._frames_pending:
+            return
+        self._frames = next(self._stages)
+        self._frames_pending = False
+        self._frames_ready.set()
+
+    def frames(self):
+        # The reverse worker retains the generator lock, but frame outputs can
+        # be read as soon as their own stage completes.
+        if self._worker is not None:
+            while not self._frames_ready.wait(.1):
+                self.scope.check()
+            if self._error:
+                raise self._error
+            self.scope.check()
+            return self._frames or self._result or self._prepared
         with self._lock:
             self.scope.check()
             if self._error:
                 raise self._error
+            try:
+                self._select_frames()
+                return self._frames or self._result or self._prepared
+            except BaseException as exc:
+                self._error = exc
+                self._release()
+                raise
+
+    def finish(self):
+        with self._lock:
+            if self._error:
+                raise self._error
             if self._result is not None:
                 return self._result
+            self.scope.check()
             if self._stages is None:
                 raise RuntimeError("反推任务已释放，请重新执行前面的入口节点")
             try:
+                self._select_frames()
                 try:
                     next(self._stages)
                 except StopIteration as finished:
@@ -49,24 +106,69 @@ class VideoJob:
                 self._error = exc
                 raise
             finally:
-                self._stages.close()
-                self._stages = None
-                self.scope.close()
+                self._release()
+
+    def start(self, reverse):
+        def work():
+            with bind_scope(self.scope):
+                if reverse:
+                    return self.finish()
+                with self._lock:
+                    try:
+                        self._select_frames()
+                        return self._frames or self._prepared
+                    except BaseException as exc:
+                        self._error = exc
+                        self._release()
+                        raise
+        self._worker = asyncio.get_running_loop().run_in_executor(None, copy_context().run, work)
+        self._worker.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
 
     def close(self):
         self.scope.cancel()
-        with self._lock:
-            if self._stages is not None:
-                self._stages.close()
-                self._stages = None
-            self.scope.close()
+        with self._lock, bind_scope(self.scope):
+            self._release()
 
     def __del__(self):
-        # Finalizers can run on Comfy's HTTP loop; cleanup must not block it.
         if getattr(self, "_stages", None) is not None:
             threading.Thread(target=self.close, name="video-job-cleanup", daemon=True).start()
         elif hasattr(self, "scope"):
             self.scope.close()
+
+
+class JobCleanup(Caching.CacheProvider):
+    def __init__(self):
+        self.jobs = {}
+        self.registered = False
+        self.lock = threading.Lock()
+
+    async def on_lookup(self, context):
+        return None
+
+    async def on_store(self, context, value):
+        pass
+
+    def should_cache(self, context, value=None):
+        return False
+
+    async def track(self, job):
+        if not self.registered:
+            await ComfyAPI().caching.register_provider(self)
+            self.registered = True
+        if job.scope.prompt_id is not None:
+            with self.lock:
+                self.jobs.setdefault(job.scope.prompt_id, []).append(job)
+
+    def on_prompt_end(self, prompt_id):
+        with self.lock:
+            jobs = self.jobs.pop(prompt_id, [])
+        for job in jobs:
+            if job._stages is not None:
+                job.scope.cancel()
+                threading.Thread(target=job.close, name="video-job-cleanup", daemon=True).start()
+
+
+JOB_CLEANUP = JobCleanup()
 
 
 class KKGO_VideoSegments(KKGO_FullVideoAgent):
@@ -82,14 +184,14 @@ class KKGO_VideoSegments(KKGO_FullVideoAgent):
     def define_schema(cls):
         schema = super().define_schema()
         schema.node_id = "KKGO_VideoSegments"
-        schema.display_name = "KK agent runninghub"
-        schema.description = ("不足32秒走A：video1输出最长30秒参考视频，反推仍覆盖完整原片，独立反推与下游打码/保存并行；32至60秒执行B的AI工具分段。"
+        schema.display_name = "kk agent 2"
+        schema.description = ("时长模式可选32秒（原模式）或17秒：不足所选秒数走A，达到所选秒数走B；超过60秒报错。32秒模式参考视频最长30秒，17秒模式最长15秒，反推仍覆盖完整分析范围；B执行AI工具分段。"
             "video1—video5连接SaveVideo，反推资料连接KK独立反推节点；两条分支可同时执行。"
             "本节点不自行保存视频，不指定保存目录。原有规则框和接口设置保持独立。")
-        # Context remains at slot 8; early IMAGE outputs append after it.
-        schema.outputs = schema.outputs[:8] + [ChainContext.Output(display_name="反推资料"),
-            *schema.outputs[8:]]
-        schema.description += "B分段后先抽帧并输出各段参考图，再由独立反推节点继续反推与审核。"
+        schema.hidden = [io.Hidden.unique_id, io.Hidden.dynprompt]
+        # Keep existing VIDEO and context slot indices.
+        schema.outputs = schema.outputs[:8] + [ChainContext.Output(display_name="反推资料")]
+        schema.description += "两种模式均在视频就绪后立即输出；独立抽帧节点输出参考图，独立反推节点输出提示词。"
         return schema
 
     @classmethod
@@ -100,16 +202,18 @@ class KKGO_VideoSegments(KKGO_FullVideoAgent):
                       image1=None, image2=None, image3=None, image4=None, image5=None,
                       image6=None, image7=None, image8=None, image9=None, image10=None,
                       chain_b_reverse_rules_text="", chain_b_review_rules_text=REVIEW_RULES, review_ai=None, audio1=None, audio2=None, audio3=None,
-                      chain_a_review_rules_text=A_REVIEW_RULES, review_api_key="", review_base_url=None):
-        # Ignore provider overrides carried by older API-format workflows.
-        base_url, model, timeout_s, max_tokens, asr_model_dir, api_protocol, reasoning_effort = (
+                      chain_a_review_rules_text=A_REVIEW_RULES, review_api_key="", review_base_url=None,
+                      duration_mode=DEFAULT_DURATION_MODE, review_model=None):
+        base_url = resolve_reverse_base_url(base_url)
+        model = resolve_model_name(model, REVERSE_SETTINGS["model"], "反推 AI 模型名称")
+        timeout_s, max_tokens, asr_model_dir, api_protocol, reasoning_effort = (
             REVERSE_SETTINGS[name] for name in (
-                "base_url", "model", "timeout_s", "max_tokens", "asr_model_dir", "api_protocol", "reasoning_effort"))
+                "timeout_s", "max_tokens", "asr_model_dir", "api_protocol", "reasoning_effort"))
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("请在本节点的数值中填写密钥")
-        review_ai = fixed_review_config(review_api_key, review_ai, review_base_url)
-        routing = route_duration(video.get_duration())
-        print(f"[KKGO] 并行入口：{routing['duration_seconds']}秒 → 链路{routing['chain']}", flush=True)
+        review_ai = fixed_review_config(review_api_key, review_ai, review_base_url, review_model)
+        routing = route_duration(video.get_duration(), duration_mode)
+        print(f"[KKGO] 并行入口／{duration_mode}：{routing['duration_seconds']}秒 → 链路{routing['chain']}", flush=True)
         images = (image1,image2,image3,image4,image5,image6,image7,image8,image9,image10)
         if routing["chain"] == "A":
             stages = cls.iter_chain_a(video, routing,
@@ -121,31 +225,31 @@ class KKGO_VideoSegments(KKGO_FullVideoAgent):
             stages = iter_chain_b(cls, video,routing,api_key,base_url,model,requirement,
                 segment_rules_text,chain_b_reverse_rules_text,timeout_s,max_tokens,
                 asr_model_dir,api_protocol,reasoning_effort,stream_usage,keep_audio,_observer,images,chain_b_review_rules_text,review_ai,(audio1,audio2,audio3))
-        scope = CancelScope()
-        def prepare():
-            try:
-                return next(stages)
-            except BaseException:
-                stages.close()
-                scope.close()
-                raise
+        job = VideoJob(stages=stages, frames_pending=routing["chain"] == "B")
+        await JOB_CLEANUP.track(job)
         try:
-            result = await cancellable_to_thread(prepare, scope=scope)
+            result = await cancellable_to_thread(job.prepare, scope=job.scope)
         except BaseException:
-            scope.cancel()
-            scope.close()
+            job.scope.cancel()
+            await asyncio.to_thread(job.close)
             raise
-        images, manifest = result[8:10] if len(result) >= 10 else ([], '{"frames":[]}')
-        return io.NodeOutput(*result[:8], VideoJob(stages=stages, scope=scope),
-                             images or [ExecutionBlocker(None)], manifest,
-                             *group_output_images(images, manifest))
+        graph = cls.hidden.dynprompt if cls.hidden is not None else None
+        if graph is not None:
+            consumers = [graph.get_node(node_id) for node_id in graph.all_node_ids()]
+            consumers = [node for node in consumers
+                         if node.get("inputs", {}).get("context") == [str(cls.hidden.unique_id), 8]]
+            reverse = any(node["class_type"] == "KKGO_VideoReverse" for node in consumers)
+            if reverse or any(node["class_type"] == "KKGO_VideoFrames" for node in consumers):
+                job.start(reverse)
+        return io.NodeOutput(*result[:8], job)
+
 
 
 class KKGO_VideoReverse(io.ComfyNode):
     @classmethod
     def define_schema(cls):
-        return io.Schema(node_id="KKGO_VideoReverse", display_name="KK agent runninghub 独立反推",
-            category="KK agent runninghub", is_output_node=True,
+        return io.Schema(node_id="KKGO_VideoReverse", display_name="kk agent 2 独立反推",
+            category="kk agent 2", is_output_node=True,
             description="接收入口的反推资料。A按A规则反推原片，B按B规则反推分段；两者均可与下游人脸处理及视频保存并行。保存路径由保存节点决定。",
             inputs=[ChainContext.Input("context", display_name="反推资料")],
             outputs=[io.String.Output(display_name="提示词"),io.String.Output(display_name="分析证据"),
@@ -169,4 +273,26 @@ class KKGO_VideoReverse(io.ComfyNode):
             raise
         images, manifest = result[8:10] if len(result) >= 10 else ([], '{"frames":[]}')
         return io.NodeOutput(*result[:3], images or [ExecutionBlocker(None)], manifest,
+                             *group_output_images(images, manifest))
+
+
+class KKGO_VideoFrames(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(node_id="KKGO_VideoFrames", display_name="kk agent 2 独立抽帧",
+            category="kk agent 2",
+            description="接收入口的反推资料，输出选好的参考图；不等待视频保存或最终提示词审核。32秒和17秒模式均生效。",
+            inputs=[ChainContext.Input("context", display_name="反推资料")],
+            outputs=[io.Image.Output(display_name="分镜参考图列表", is_output_list=True),
+                     io.String.Output(display_name="抽帧信息"),
+                     *[io.Image.Output(display_name=f"第{index}段参考图", is_output_list=True)
+                       for index in range(1, 6)]])
+
+    @classmethod
+    async def execute(cls, context):
+        if not isinstance(context, VideoJob):
+            raise ValueError("请连接入口节点的「反推资料」输出")
+        result = await cancellable_to_thread(context.frames, scope=context.scope)
+        images, manifest = result[8:10] if len(result) >= 10 else ([], '{"frames":[]}')
+        return io.NodeOutput(images or [ExecutionBlocker(None)], manifest,
                              *group_output_images(images, manifest))

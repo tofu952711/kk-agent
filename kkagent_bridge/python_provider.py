@@ -6,6 +6,7 @@ import base64
 import copy
 import io
 import json
+import socket
 import time
 from urllib.parse import urlsplit, urlunsplit
 
@@ -14,6 +15,35 @@ import aiohttp
 from .errors import BridgeError
 
 MAX_BYTES = 128 * 1024 * 1024
+
+
+def transport_error(exc, cfg, *, response_started, elapsed, request_bytes):
+    """Report connection facts without exposing exception text, headers or payloads."""
+    if isinstance(exc, aiohttp.ClientConnectorCertificateError):
+        reason = "TLS证书校验失败"
+    elif isinstance(exc, aiohttp.ClientSSLError):
+        reason = "TLS连接失败"
+    elif isinstance(exc, aiohttp.ClientProxyConnectionError):
+        reason = "代理连接失败"
+    elif isinstance(exc, aiohttp.ClientConnectorError):
+        cause = exc.os_error
+        reason = "DNS解析失败" if isinstance(cause, socket.gaierror) else "无法建立连接"
+    elif isinstance(exc, aiohttp.ClientPayloadError):
+        reason = "响应内容传输不完整"
+    elif isinstance(exc, aiohttp.ServerDisconnectedError):
+        reason = "对端关闭连接"
+    elif isinstance(exc, aiohttp.ClientConnectionError):
+        reason = "连接中断"
+    else:
+        reason = "HTTP传输异常"
+    host = urlsplit(endpoint(cfg)).hostname
+    stage = "接收响应" if response_started else "连接或发送请求"
+    cause = exc.os_error if isinstance(exc, aiohttp.ClientConnectorError) else None
+    number = getattr(cause, "errno", None)
+    errno_text = f"；errno={number}" if isinstance(number, int) else ""
+    return BridgeError("provider_transport",
+        f"{reason}；类型={type(exc).__name__}；主机={host}；阶段={stage}；"
+        f"本次请求耗时={elapsed:.1f}秒；请求体={request_bytes/1048576:.2f} MiB{errno_text}；未自动重跑")
 
 
 def protocol(cfg):
@@ -226,19 +256,25 @@ class Stream:
         return self.complete
 
 
-async def read_response(response, kind):
+async def read_response(response, kind, trace=None):
     stream = Stream(kind)
     if "text/event-stream" not in response.headers.get("Content-Type", ""):
         chunks, total = [], 0
         async for chunk in response.content.iter_chunked(65536):
+            if trace is not None:
+                trace.chunk(chunk)
             total += len(chunk)
             if total > MAX_BYTES:
                 raise BridgeError("response_limit", "模型响应超过大小上限")
             chunks.append(chunk)
+        if trace is not None:
+            trace.eof()
         complete = json.loads(b"".join(chunks))
     else:
         buffer, data, total = b"", [], 0
         async for chunk in response.content.iter_chunked(65536):
+            if trace is not None:
+                trace.chunk(chunk)
             total += len(chunk)
             if total > MAX_BYTES:
                 raise BridgeError("response_limit", "模型响应超过大小上限")
@@ -249,15 +285,21 @@ async def read_response(response, kind):
                 if not line:
                     if data:
                         stream.consume("\n".join(data))
+                        if trace is not None:
+                            trace.event("\n".join(data), kind)
                         data = []
                 elif line.startswith("data:"):
                     data.append(line[5:].lstrip(" "))
+        if trace is not None:
+            trace.eof()
         if buffer.strip():
             line = buffer.rstrip(b"\r").decode("utf-8")
             if line.startswith("data:"):
                 data.append(line[5:].lstrip(" "))
         if data:
             stream.consume("\n".join(data))
+            if trace is not None:
+                trace.event("\n".join(data), kind)
         complete = stream.result()
     return normalize(complete, kind), stream.first_token
 
@@ -302,7 +344,7 @@ def normalize(complete, kind):
     return {"raw": raw, "text": text, "calls": calls, "finish_reason": "tool-calls" if calls else "completed", "usage": normalized_usage}
 
 
-async def next_turn(client, cfg, rules, history, definitions):
+async def next_turn(client, cfg, rules, history, definitions, trace=None):
     kind = protocol(cfg)
     raw = json.dumps(payload(cfg, rules, history, definitions), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(raw) > MAX_BYTES:
@@ -314,16 +356,30 @@ async def next_turn(client, cfg, rules, history, definitions):
         headers["Authorization"] = "Bearer " + cfg["api_key"]
     for attempt in range(4):
         started = time.monotonic()
-        async with client.post(endpoint(cfg), data=raw, headers=headers, proxy=cfg.get("proxy_url") or None, allow_redirects=False) as response:
-            if 200 <= response.status < 300:
-                turn, first = await read_response(response, kind)
-                turn.update(elapsed=time.monotonic() - started, first_token=first)
-                return turn
-            status = response.status
-            try:
-                retry_after = min(30, max(0, float(response.headers.get("Retry-After", 0))))
-            except ValueError:
-                retry_after = 0
+        response_started = False
+        if trace is not None:
+            trace.sending(len(raw), attempt + 1)
+        try:
+            async with client.post(endpoint(cfg), data=raw, headers=headers, proxy=cfg.get("proxy_url") or None, allow_redirects=False) as response:
+                response_started = True
+                if trace is not None:
+                    trace.headers(response)
+                if 200 <= response.status < 300:
+                    turn, first = await read_response(response, kind, trace=trace)
+                    if trace is not None:
+                        trace.completed(turn["text"])
+                    turn.update(elapsed=time.monotonic() - started, first_token=first)
+                    return turn
+                status = response.status
+                try:
+                    retry_after = min(30, max(0, float(response.headers.get("Retry-After", 0))))
+                except ValueError:
+                    retry_after = 0
+        except aiohttp.ClientError as exc:
+            if trace is not None:
+                trace.row["transport_exception_type"] = type(exc).__name__
+            raise transport_error(exc, cfg, response_started=response_started,
+                elapsed=time.monotonic() - started, request_bytes=len(raw)) from None
         if attempt < 3 and (status in (408, 429) or 500 <= status < 600):
             await asyncio.sleep(retry_after or 2 ** attempt)
             continue

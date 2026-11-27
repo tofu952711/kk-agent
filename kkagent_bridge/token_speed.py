@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 
-from . import paths
+from . import paths, error_log
 
 _LOCK = threading.Lock()
 _ACTIVE = {}
@@ -54,17 +54,20 @@ class SpeedRun:
         self.lock = threading.RLock()
 
     def __enter__(self):
+        error_log.begin(self.run_id, self.node_id)
         with _LOCK:
             _ACTIVE[str(self.node_id)] = self
         self.publish(save=True)
         return self
 
-    def __exit__(self, exc_type, *_):
+    def __exit__(self, exc_type, exc, tb):
         from .cancellation import current_scope
         scope = current_scope()
         cancelled = ((scope is not None and scope.cancelled.is_set()) or
                      (exc_type is not None and exc_type.__name__ in ('InterruptProcessingException', 'CancelledError')))
-        self.finish('cancelled' if cancelled else ('error' if exc_type else 'completed'))
+        status = 'cancelled' if cancelled else ('error' if exc_type else 'completed')
+        self.finish(status)
+        error_log.finish(self.run_id, status, exc)
 
     def snapshot(self):
         rows = [{**row, 'elapsed_seconds': row['elapsed_seconds'] +
@@ -86,6 +89,9 @@ class SpeedRun:
                 'note': 'tok/s=接口返回的outputTokens÷请求耗时（含等待）；有效速度含预处理、工具、重试和复核。未返回用量时不估算；推理token不重复相加。'}
 
     def handle(self, data):
+        if data.get('kind') == 'transport':
+            error_log.update(self.run_id, {**data, 'phase': self.phase})
+            return
         with self.lock:
             data = {**data, 'phase': self.phase}
             self.requests[data['request_id']] = data

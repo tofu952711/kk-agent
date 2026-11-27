@@ -21,7 +21,7 @@ import nodes
 class RegistrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_v3_loader_preserves_node_ids_and_ports(self):
         self.assertTrue(await nodes.load_custom_node(str(ROOT)))
-        expected = {"KKGO_FullVideoAgent": 15, "KKGO_VideoSegments": 16, "KKGO_VideoReverse": 10}
+        expected = {"KKGO_FullVideoAgent": 15, "KKGO_VideoSegments": 9, "KKGO_VideoReverse": 10, "KKGO_VideoFrames": 7}
         for name, outputs in expected.items():
             cls = nodes.NODE_CLASS_MAPPINGS[name]
             schema = cls.GET_SCHEMA()
@@ -40,9 +40,14 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(by_id[target]["inputs"][target_slot]["link"], link_id)
             self.assertEqual(by_id[source]["outputs"][slot]["type"], kind)
         widgets = by_id[2]["widgets_values"]
-        self.assertEqual(widgets[0], "")
-        self.assertEqual(widgets[8], "")
-        self.assertTrue(widgets[2].strip() and widgets[4].strip() and widgets[5].strip())
+        cls = nodes.NODE_CLASS_MAPPINGS["KKGO_VideoSegments"]
+        names = [item.id for item in cls.define_schema().inputs if hasattr(item, "default")]
+        values = dict(zip(names, widgets))
+        self.assertEqual(values["api_key"], "")
+        self.assertEqual(values["review_api_key"], "")
+        self.assertTrue(all(values[name].strip() for name in ["requirement", "rules_text", "segment_rules_text", "chain_b_reverse_rules_text"]))
+        self.assertEqual(cls.define_schema().display_name, "kk agent 2")
+        self.assertTrue(all(nodes.NODE_CLASS_MAPPINGS[name].define_schema().category == "kk agent 2" for name in ["KKGO_FullVideoAgent", "KKGO_VideoSegments", "KKGO_VideoReverse", "KKGO_VideoFrames"]))
 
 
 if __name__ == "__main__":

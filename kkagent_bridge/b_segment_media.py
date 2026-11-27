@@ -158,7 +158,7 @@ def prepare_segment_bundle(source_output, report, slots, index, segment, count, 
             prepared_evidence_text(scoped_report, shots, transcript, slots, selected_frames))
     if reference and reference["trimmed"]:
         text += ("\n\n【本段参考视频长度】交给生成模型的@视频1仅覆盖原片"
-                 f"{reference['reference_source_start']:g}—{reference['reference_source_end']:g}秒，最长30秒。"
+                 f"{reference['reference_source_start']:g}—{reference['reference_source_end']:g}秒，最长{reference.get('reference_limit_seconds', 30):g}秒。"
                  f"本次反推、抽帧与音轨证据仍覆盖原片{start:g}—{end:g}秒的完整本段。"
                  "提示词仍须描述完整本段，包括参考视频裁短后未包含的尾部；不缩短正文时间轴，不移动原分段切点。")
     return output, text, prepared_images(output, scoped_report), scope

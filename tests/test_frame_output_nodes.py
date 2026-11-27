@@ -81,10 +81,11 @@ class OutputTests(unittest.IsolatedAsyncioTestCase):
             "entry":{"class_type":"KKEarlyEntry","inputs":{"video":["source",0],"api_key":"offline",
                 "review_api_key":"offline","requirement":"test","rules_text":"test"}},
             "reverse":{"class_type":"KKGO_VideoReverse","inputs":{"context":["entry",8]}},
-            "save":{"class_type":"KKEarlySave","inputs":{"images":["entry",11],"filename_prefix":"early"}},
+            "frames":{"class_type":"KKGO_VideoFrames","inputs":{"context":["entry",8]}},
+            "save":{"class_type":"KKEarlySave","inputs":{"images":["frames",2],"filename_prefix":"early"}},
         }
         with patch.dict(comfy_nodes.NODE_CLASS_MAPPINGS,{"KKEarlySource":Source,"KKEarlyEntry":Entry,
-                "KKGO_VideoReverse":stages.KKGO_VideoReverse,"KKEarlySave":ProbeSave}), \
+                "KKGO_VideoReverse":stages.KKGO_VideoReverse,"KKGO_VideoFrames":stages.KKGO_VideoFrames,"KKEarlySave":ProbeSave}), \
                 patch.object(folder_paths,"output_directory",str(directory)):
             await executor.execute_async(prompt,"early-frame-test",execute_outputs=["reverse","save"])
         self.assertTrue(executor.success)
@@ -97,10 +98,13 @@ class OutputTests(unittest.IsolatedAsyncioTestCase):
         reverse = stages.KKGO_VideoReverse.define_schema()
         self.assertEqual(len(full.outputs),15)
         self.assertTrue(full.outputs[8].is_output_list)
-        self.assertEqual(len(entry.outputs),16)
+        self.assertEqual(len(entry.outputs),9)
         self.assertFalse(entry.outputs[8].is_output_list)
-        self.assertTrue(entry.outputs[9].is_output_list)
-        self.assertTrue(all(o.is_output_list for o in entry.outputs[11:16]))
+        frames = stages.KKGO_VideoFrames.define_schema()
+        self.assertEqual(len(frames.outputs),7)
+        self.assertTrue(frames.outputs[0].is_output_list)
+        self.assertFalse(frames.outputs[1].is_output_list)
+        self.assertTrue(all(o.is_output_list for o in frames.outputs[2:]))
         self.assertEqual(len(reverse.outputs),10)
         self.assertTrue(reverse.outputs[3].is_output_list)
         self.assertFalse(reverse.outputs[4].is_output_list)

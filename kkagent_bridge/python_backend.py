@@ -17,6 +17,7 @@ import aiohttp
 from jsonschema import Draft202012Validator
 
 from .errors import BridgeError
+from .error_log import RequestTrace
 from .python_mcp import MediaWorker, _ACTIVE_PIDS
 from .python_provider import image_block, next_turn, protocol
 
@@ -107,6 +108,7 @@ class SDKRuntime:
         self._loop = self._task = None
         self._sessions = {}
         self.last_diagnostics = {}
+        self._last_request_trace = None
         with _STATE_LOCK:
             _RUNTIMES.add(self)
 
@@ -146,6 +148,7 @@ class SDKRuntime:
             self._cancelled.clear()
             self._active = session
             self._alive = True
+            self._last_request_trace = None
         try:
             async def execute():
                 with self._lock:
@@ -156,11 +159,13 @@ class SDKRuntime:
                 return await asyncio.wait_for(self._run(session, blocks, on_progress), timeout=float(timeout))
             return asyncio.run(execute())
         except asyncio.CancelledError:
-            raise BridgeError("cancelled", "任务已取消，模型连接和媒体工具已关闭") from None
+            raise BridgeError("cancelled", "任务已取消，模型连接和媒体工具已关闭" + self._request_summary()) from None
         except asyncio.TimeoutError:
-            raise BridgeError("timeout", "任务超时，模型连接和媒体工具已关闭") from None
+            raise BridgeError("timeout", "任务超时，模型连接和媒体工具已关闭" + self._request_summary()) from None
         except aiohttp.ClientError:
-            raise BridgeError("provider_transport", "模型连接失败或中断，未自动重跑") from None
+            raise BridgeError("provider_transport", "模型连接失败或中断，未自动重跑" + self._request_summary()) from None
+        except BridgeError as exc:
+            raise BridgeError(exc.code, str(exc).removeprefix(exc.code + ": ") + self._request_summary()) from None
         finally:
             with self._lock:
                 self._loop = self._task = None
@@ -168,6 +173,9 @@ class SDKRuntime:
                 if not self._alive:
                     self._sessions.clear()
             self._turn_lock.release()
+
+    def _request_summary(self):
+        return self._last_request_trace.summary() if self._last_request_trace is not None else ""
 
     async def _run(self, session, blocks, progress):
         cfg = self.cfg
@@ -215,9 +223,12 @@ class SDKRuntime:
                                 "output_tokens": None, "average_tps": None, "finish_reason": "", "usage": {}}
                         monitor({**base, "kind": "start"})
                         began = time.monotonic()
+                        trace = RequestTrace(monitor, request_id, cfg)
+                        self._last_request_trace = trace
                         try:
-                            turn = await next_turn(client, cfg, rules, history, definitions)
+                            turn = await next_turn(client, cfg, rules, history, definitions, trace=trace)
                         except BaseException as exc:
+                            trace.failed(exc)
                             reason = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
                             monitor({**base, "kind": "end", "elapsed_seconds": time.monotonic() - began, "finish_reason": reason})
                             raise

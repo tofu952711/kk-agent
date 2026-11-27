@@ -1,4 +1,17 @@
-# KK agent runninghub
+# kk agent 2
+
+
+## 0.2.20：kk agent 2
+
+- 插件、节点及分类统一显示为 **kk agent 2**。继续使用原仓库、安装目录和 `KKGO_*` 节点 ID，旧工作流可升级。
+- 32秒模式：不足32秒走A，32—60秒走B，参考视频最长30秒。17秒模式：不足17秒走A，17—60秒走B，参考视频最长15秒。反推仍分析完整原片/完整分段。
+- 反推和审核区域均可编辑 Base URL、模型名称和密钥，填写值用于实际模型调用。
+- B分段视频准备完成立即输出到原生 SaveVideo；后台继续统筹、并行选帧、并行反推及最终审核，反推不读取保存节点生成的文件。
+- 新增 **kk agent 2 独立抽帧**（`KKGO_VideoFrames`）：图片选好即可交给保存/编辑分支，不等待最终审核。入口只保留原有文本、VIDEO和反推资料输出；旧工作流的图片/抽帧信息连线在加载时自动迁移，旧API工作流也兼容。
+- 多个原生 SaveVideo/SaveImage 之间仍由 ComfyUI 依次调度；异步发生在保存分支与后台AI任务之间。
+- 任务失败日志记录接口响应状态、有限内容片段和异常，密钥隐藏；新任务清除旧记录，成功任务不保留报错日志。
+
+更新后重启 ComfyUI、强制刷新网页，再重新打开工作流。已有保存目录、格式和编码设置保持原值。
 
 Linux ComfyUI / RunningHub video analysis, segmentation, parallel reverse prompting, review and reference-frame outputs. Models and media are processed locally; configured remote AI requests require your own API credentials. RunningHub certification is not implied.
 
@@ -13,7 +26,7 @@ git clone https://github.com/tofu952711/kk-agent.git ComfyUI-KKAgent-RunningHub
 /path/to/comfy-venv/bin/python ComfyUI-KKAgent-RunningHub/install.py --comfy-root /path/to/ComfyUI
 ```
 
-Alternatively unzip the `kk-agent-runninghub-0.2.19-source-linux.zip` release into `custom_nodes/`. In the Manager git-URL installation flow, Manager installs `requirements.txt` and runs the `install.py` hook. The source hook does not run pip, does not require a bundle manifest or local wheels, and does not replace PyTorch/CUDA. It checks prerequisites, verifies existing model hashes and downloads only missing model assets from their original sources or SHA256-locked existing GitHub mirrors.
+Alternatively unzip the `kk-agent-2-0.2.20-source-linux.zip` release into `custom_nodes/`. In the Manager git-URL installation flow, Manager installs `requirements.txt` and runs the `install.py` hook. The source hook does not run pip, does not require a bundle manifest or local wheels, and does not replace PyTorch/CUDA. It checks prerequisites, verifies existing model hashes and downloads only missing model assets from their original sources or SHA256-locked existing GitHub mirrors.
 
 Install system FFmpeg/FFprobe before installing models. Existing bundled tools remain supported; explicit `KKGO_FFMPEG` and `KKGO_FFPROBE` executable paths take priority. There is no automatic apt/sudo or runtime package installation. Restart ComfyUI and refresh the webpage after installation/update.
 
@@ -49,15 +62,15 @@ This explicit installation command verifies the bundle and installs the pinned `
 
 ## Example and validation
 
-Open `Workflow > Browse Templates` and select `KKagent_basic`, or drag `example_workflows/KKagent_basic.json` into ComfyUI. Upload/select a video, fill in the reverse-model and review-model keys, and replace the illustrative rules with your own. The example uses only core `LoadVideo` / `PreviewAny` and the existing KKagent entry/reverse nodes. Video and IMAGE outputs may be connected to core save nodes. No credentials, personal reference images or user workflows are included.
+Open `Workflow > Browse Templates` and select `KKagent_basic`, or drag `example_workflows/KKagent_basic.json` into ComfyUI. Upload/select a video, fill in the reverse-model and review-model keys, and replace the illustrative rules with your own. The example uses core loading, saving and preview nodes with the kk agent 2 entry, independent frame and reverse nodes. Video and IMAGE outputs may be connected to core save nodes. No credentials, personal reference images or user workflows are included.
 
-All existing node IDs, input/output order and frontend workflow migration are preserved. The plugin now exposes a V3 `ComfyExtension` / `comfy_entrypoint`. `WEB_DIRECTORY` continues to serve the same frontend.
+Existing node IDs and VIDEO/context output positions are preserved. Historical frame links migrate to the independent frame node. The plugin now exposes a V3 `ComfyExtension` / `comfy_entrypoint`. `WEB_DIRECTORY` continues to serve the same frontend.
 
 ```bash
 /path/to/comfy-venv/bin/python scripts/check_linux.py --comfy-root /path/to/ComfyUI
 ```
 
-Validation and historical limitations are documented in `VALIDATION.md`. New installer checks use local fixtures; they do not establish remote model semantic quality or RunningHub deployment success. Historical lifecycle-suite failures have not been claimed as fixed by this packaging update.
+Validation and historical limitations are documented in `VALIDATION.md`. New installer checks use local fixtures; they do not establish remote model semantic quality or RunningHub deployment success. The 0.2.20 lifecycle suite covers prompt-end cleanup, cancellation and downstream failure handling.
 
 ## Registry metadata
 
@@ -67,7 +80,7 @@ References: [Manager installation hooks](https://docs.comfy.org/custom-nodes/bac
 
 ## 参考视频时长
 
-A链路及B链路每段输出的参考视频最长30秒。分析、抽帧、语音证据和反推提示词仍覆盖完整原片或该段完整分析区间，不移动原分段边界，也不将裁短的尾部并入下一段。
+32秒模式下，A链路及B链路每段输出的参考视频最长30秒；17秒模式下最长15秒。分析、抽帧、语音证据和反推提示词仍覆盖完整原片或该段完整分析区间，不移动原分段边界，也不将裁短的尾部并入下一段。
 
 ## 0.2.7：可编辑分镜参考帧
 
@@ -78,7 +91,7 @@ B链路实际分段完成后，每段使用一个独立抽帧AI会话。按用�
 各段分别生成视频，所以各段图片编号独立计算：原有上传图在前，抽帧图在后。例如上传image1—image3，第1段抽两张则使用@图片4、@图片5；第2段抽一张则重新使用@图片4。原有非连续插口保留插口编号，抽帧从最大已连接插口编号之后开始。用户修改这些帧后，应将修改后的图按本段编号放到参考图后面。子智能体收到的是本段完整映射，提示词在对应动作时间处引用修改后的图片。审核后程序再次校验引用，缺图或引用未提供的编号会报错。
 
 - 一体节点 `KKGO_FullVideoAgent` 新增“分镜参考图列表”（IMAGE，列表输出）和“抽帧信息”（JSON文本）。
-- 分流工作流从 `KKGO_VideoSegments`（入口节点）取得提前输出的图片和抽帧信息；入口的video1—video5和“反推资料”原有位置不变。独立反推节点保留同样的图片输出供旧连线兼容，但这些端口会等待最终审核。
+- 0.2.20起，分流工作流从 `KKGO_VideoFrames`（独立抽帧）取得提前输出的图片和抽帧信息；入口的video1—video5和“反推资料”原有位置不变。旧图片连线自动迁移。
 - 将“分镜参考图列表”连接标准“保存图像”或其他支持IMAGE列表的节点，可一次取得全部抽帧。列表按段号、段内时间排序；用“抽帧信息”中的segment_index区分每次生成，output_list_index是整个列表中的1起算位置，segment_image_index是本段图序，image_number/mention是该段生成时的引用编号。
 - 抽帧PNG保存在本次任务的 `b-results/<run_id>/frames/segment-N/`，对应记录见 `frame-manifest.json`，不会因临时媒体目录清理而丢失。
 - 抽帧AI复用已有审核区域的接口、密钥和视觉模型，但每段是独立会话；每段一次视觉请求，契约校验失败时最多补正一次。候选覆盖全段、剪辑点附近，并加密段首1秒内逐帧观察，不能保证命中每个未检测到的瞬时镜头。

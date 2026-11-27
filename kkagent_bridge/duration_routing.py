@@ -8,16 +8,25 @@ import time
 from .video_segments import validate_segments
 
 
-def route_duration(duration):
+DEFAULT_DURATION_MODE = "32秒模式（原模式）"
+DURATION_MODES = {DEFAULT_DURATION_MODE: 32, "17秒模式": 17}
+
+
+def route_duration(duration, duration_mode=DEFAULT_DURATION_MODE):
+    if duration_mode not in DURATION_MODES:
+        raise ValueError("请选择有效的时长模式：32秒模式（原模式）或17秒模式")
+    threshold = DURATION_MODES[duration_mode]
     duration = float(duration)
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("无法确定有效视频时长")
     if duration > 60:
         raise ValueError(f"原视频为{duration:g}秒，当前策略仅支持60秒以内的视频")
-    chain = "A" if duration < 32 else "B"
+    chain = "A" if duration < threshold else "B"
     return {"duration_seconds": duration, "chain": chain,
+            "duration_mode": duration_mode, "split_threshold_seconds": threshold,
+            "reference_limit_seconds": 15.0 if threshold == 17 else 30.0,
             "split_required": chain == "B", "count": None if chain == "B" else 0,
-            "boundary_note": "不足32秒进入链路A；32至60秒进入链路B，由AI调用工具分段后独立反推"}
+            "boundary_note": f"不足{threshold}秒进入链路A；{threshold}至60秒进入链路B，由AI调用工具分段后独立反推"}
 
 
 

@@ -98,3 +98,14 @@ Re-ran 23 runtime tests, 22 frame-selection tests, 3 real-Comfy image-output tes
 ## 0.2.19 frame export boundary tolerance (2026-11-26)
 
 All 23 frame-selection tests passed. The real 24-fps regression accepts 0.499-second segment-boundary differences and rejects 0.501-second differences on both ends, while still rejecting a candidate timestamp with no matching decoded frame. The original failing source frame at 24.291667 seconds was exported successfully at 1080x1440 in an offline reproduction, without paid API calls. Only the segment-boundary test is relaxed; original selected-frame identity and source PTS matching are preserved.
+
+
+## 0.2.20 kk agent 2 (2026-11-27)
+
+- Plugin display name, node categories and default workflow titles use `kk agent 2`. Existing `KKGO_*` IDs and VIDEO/context output positions remain stable; user-assigned titles are preserved.
+- Source/installer checks: 12 installation fixture tests, 1 fresh-source installation test and 2 real V3 registration/example tests passed.
+- Execution checks: 6 duration-mode tests, 3 asynchronous-save tests, 8 lifecycle tests, 3 IMAGE-list output tests, 7 real FFmpeg reference-limit tests, 11 diagnostic-log tests and 25 runtime tests passed (78 unittest cases total).
+- The separate fixed-setting check passed for editable Base URLs/models, A/B dispatch and review routing. Both JavaScript migration suites passed, including historical widget values, default-title renaming, independent frame links and saver settings.
+- Asynchronous tests use the actual ComfyUI scheduler and core video/image savers with event-controlled local AI substitutes. They cover both 32-second and 17-second modes, both chains and either output scheduling order; they assert video saving overlaps background work and frame saving does not wait for final prompt review.
+- No paid model API was called by these release checks. Installer downloads were local test fixtures. Remote semantic quality and RunningHub deployment are not established by these tests.
+- The source ZIP excludes weights, wheels, runtime data, credentials and media. Historical tracked model files and checksum-locked model mirror links are unchanged.

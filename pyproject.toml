@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-kkagent-runninghub-python"
-version = "0.2.19"
-description = "Linux KK video reverse nodes with a task-local Python runtime"
+version = "0.2.20"
+description = "kk agent 2: Linux video segmentation, asynchronous saving and parallel reverse prompting"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -13,5 +13,5 @@ Repository = "https://github.com/tofu952711/kk-agent"
 
 [tool.comfy]
 PublisherId = "tofu952711"
-DisplayName = "KK agent runninghub"
+DisplayName = "kk agent 2"
 requires-comfyui = ">=0.45.0"

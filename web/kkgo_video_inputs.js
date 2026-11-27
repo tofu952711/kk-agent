@@ -22,8 +22,18 @@ app.registerExtension({
         }
       }
       if (node.type === "KKGO_VideoSegments" && (!node.title ||
-          ["KKGO 视频分析／B分段（并行入口）", "KKGO 视频分析／B分段（SaveVideo与反推分流）"].includes(node.title))) {
-        node.title = "KK agent 视频反推";
+          ["KKGO 视频分析／B分段（并行入口）", "KKGO 视频分析／B分段（SaveVideo与反推分流）",
+           "KK agent runninghub", "KK agent 视频反推"].includes(node.title))) {
+        node.title = "kk agent 2";
+      }
+      const oldTitles = {
+        KKGO_FullVideoAgent: ["KK agent runninghub 完整视频反推"],
+        KKGO_VideoReverse: ["KK agent runninghub 独立反推", "KK 独立反推（与SaveVideo并行） GO"],
+        KKGO_VideoFrames: ["KK agent runninghub 独立抽帧", "KK 独立抽帧（与视频保存并行）"],
+      };
+      if (oldTitles[node.type]?.includes(node.title)) {
+        node.title = node.type === "KKGO_FullVideoAgent" ? "kk agent 2 完整视频反推" :
+          node.type === "KKGO_VideoReverse" ? "kk agent 2 独立反推" : "kk agent 2 独立抽帧";
       }
       if (["KKGO_FullVideoAgent", "KKGO_VideoSegments"].includes(node.type)) {
         node.widgets_values = migrateFullVideoWidgets(node.widgets_values);
@@ -43,7 +53,7 @@ app.registerExtension({
     }
   },
   beforeRegisterNodeDef(nodeType, nodeData) {
-    if (nodeData.name === "KKGO_VideoReverse") {
+    if (["KKGO_VideoReverse", "KKGO_VideoFrames"].includes(nodeData.name)) {
       const original = nodeType.prototype.onConfigure;
       nodeType.prototype.onConfigure = function () {
         const result = original?.apply(this, arguments);
@@ -79,8 +89,22 @@ app.registerExtension({
       if (aReviewWidget && !aReviewLinked && (!Array.isArray(migrated) || aReviewIndex >= migrated.length || aReviewWidget.value == null)) {
         aReviewWidget.value = aReviewDefault;
       }
+      // Appended after existing widgets so old rule/credential positions stay intact.
+      const modeWidget = this.widgets?.find((item) => item.name === "duration_mode");
+      const modeLinked = this.inputs?.some((input) => input.name === "duration_mode" && input.link != null);
+      const modeSpec = nodeData.input?.optional?.duration_mode;
+      const modeOptions = Array.isArray(modeSpec?.[0]) ? modeSpec[0] :
+        modeSpec?.[1]?.options ?? ["32秒模式（原模式）", "17秒模式"];
+      if (modeWidget && !modeLinked && !modeOptions.includes(modeWidget.value)) {
+        modeWidget.value = modeSpec?.[1]?.default ?? "32秒模式（原模式）";
+      }
+      const baseWidget = this.widgets?.find((item) => item.name === "base_url");
+      const baseLinked = this.inputs?.some((input) => input.name === "base_url" && input.link != null);
+      if (baseWidget && !baseLinked && (!Array.isArray(migrated) || migrated.length < 2 || baseWidget.value == null)) {
+        baseWidget.value = nodeData.input?.optional?.base_url?.[1]?.default ?? "https://api.deepseek.com";
+      }
       const reviewLinked = this.inputs?.some((input) => input.name === "chain_b_review_rules_text" && input.link != null);
-      if (reviewWidget && !reviewLinked && (!Array.isArray(migrated) || migrated.length <= 7)) {
+      if (reviewWidget && !reviewLinked && (!Array.isArray(migrated) || migrated.length <= 9)) {
         reviewWidget.value = reviewDefault;
       }
       if (this.inputs?.some((input) => input.name === "person" || input.name === "product") ||
@@ -89,15 +113,15 @@ app.registerExtension({
       }
       migrateFullVideoOutputs(this);
       if (migrated !== previous) {
-        for (const [index, name] of [[0, "api_key"], [1, "requirement"], [2, "rules_text"],
-            [3, "keep_audio"], [4, "segment_rules_text"], [5, "chain_b_reverse_rules_text"],
-            [6, "stream_usage"], [7, "chain_b_review_rules_text"],
-            [8, "review_api_key"], [9, "review_base_url"], [10, "chain_a_review_rules_text"]]) {
+        for (const [index, name] of [[0, "api_key"], [1, "base_url"], [2, "model"], [3, "requirement"], [4, "rules_text"],
+            [5, "keep_audio"], [6, "segment_rules_text"], [7, "chain_b_reverse_rules_text"],
+            [8, "stream_usage"], [9, "chain_b_review_rules_text"],
+            [10, "review_api_key"], [11, "review_base_url"], [12, "review_model"], [13, "chain_a_review_rules_text"], [14, "duration_mode"]]) {
           if (index >= migrated.length) continue;
           const widget = this.widgets?.find((item) => item.name === name);
           if (widget) widget.value = migrated[index];
         }
-        console.info("[KKGO] 已兼容旧节点字段顺序，保留数值、规则文本及审核配置，反推配置已固定");
+        console.info("[KKGO] 已兼容旧节点字段顺序，保留数值、规则文本及审核配置，Base URL 和模型名称可在节点中填写");
       }
       resizeFullVideoInputs(this);
       return result;

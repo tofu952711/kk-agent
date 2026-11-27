@@ -13,7 +13,7 @@ from ..kkagent_bridge.media_workflow import configure_media_config, evidence
 from ..kkagent_bridge.video_preparation import prepare_video, prepared_images, prepared_evidence_text
 from ..kkagent_bridge.images import tensor_to_base64
 from ..kkagent_bridge.media_tools import MediaTools
-from ..kkagent_bridge.duration_routing import route_duration
+from ..kkagent_bridge.duration_routing import route_duration, DEFAULT_DURATION_MODE, DURATION_MODES
 from ..kkagent_bridge.b_review import REVIEW_RULES
 from ..kkagent_bridge.a_review import REVIEW_RULES as A_REVIEW_RULES
 from ..kkagent_bridge.frame_selection import group_output_images
@@ -37,7 +37,21 @@ REVIEW_SETTINGS = {
 }
 
 
-def fixed_review_config(review_api_key, legacy_review=None, review_base_url=None):
+def resolve_reverse_base_url(value):
+    address = REVERSE_SETTINGS["base_url"] if value is None else value
+    if not isinstance(address, str) or not address.strip():
+        raise ValueError("请填写反推 AI Base URL")
+    return address.strip()
+
+
+def resolve_model_name(value, default, label):
+    model = default if value is None else value
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError(f"请填写{label}")
+    return model.strip()
+
+
+def fixed_review_config(review_api_key, legacy_review=None, review_base_url=None, review_model=None):
     key = review_api_key
     if not key and isinstance(legacy_review, dict):
         key = legacy_review.get("api_key", "")
@@ -48,28 +62,33 @@ def fixed_review_config(review_api_key, legacy_review=None, review_base_url=None
         address = legacy_review.get("base_url") if isinstance(legacy_review, dict) else None
         address = address or REVIEW_SETTINGS["base_url"]
     if not isinstance(address, str) or not address.strip():
-        raise ValueError("请在审核区域的数值2中填写地址")
-    return {"review_ai": "自定义", "api_key": key, **REVIEW_SETTINGS, "base_url": address.strip()}
+        raise ValueError("请填写审核 AI Base URL")
+    model = resolve_model_name(review_model, REVIEW_SETTINGS["model"], "审核 AI 模型名称")
+    return {"review_ai": "自定义", "api_key": key, **REVIEW_SETTINGS, "base_url": address.strip(), "model": model}
 
 
 class KKGO_FullVideoAgent(io.ComfyNode):
     @classmethod
     def define_schema(cls):
-        return io.Schema(node_id="KKGO_FullVideoAgent", display_name="KK agent runninghub 完整视频反推", category="KK agent runninghub",
-            description="只按视频实际时长选择独立链路：不足32秒进入A，按A规则反推后由独立审核AI检查；32至60秒进入B，AI按B分段规定调用工具实际裁切，再独立使用B反推规定生成提示词。两阶段均携带共用素材资料。超过60秒报错。支持最多五个分段VIDEO输出。",
+        return io.Schema(node_id="KKGO_FullVideoAgent", display_name="kk agent 2 完整视频反推", category="kk agent 2",
+            description="按时长模式选择独立链路：原模式不足32秒走A、32秒及以上走B；17秒模式不足17秒走A、17秒及以上走B。A按A规则反推并审核；B按B规则实际分段、反推并审核。超过60秒报错。支持最多五个分段VIDEO输出。",
             hidden=[io.Hidden.unique_id],
             inputs=[io.Video.Input("video", display_name="原视频"),
                     *[io.Image.Input(f"image{index}", optional=True, display_name=f"image{index}",
                                      tooltip=f"通用参考图{index}，用途由本次用户要求和系统提示词指定；可不连接。")
                       for index in range(1, 11)],
-                    io.String.Input("api_key", default="", display_name="数值"),
-                    io.String.Input("requirement", multiline=True, default="按系统提示词分析原视频；参考图用途在此说明。",
+                    io.String.Input("api_key", optional=True, default="", display_name="数值"),
+                    io.String.Input("base_url", optional=True, default=REVERSE_SETTINGS["base_url"],
+                                    display_name="反推 AI Base URL", tooltip="反推和B分段AI使用此地址，可填写服务商的Base URL。"),
+                    io.String.Input("model", optional=True, default=REVERSE_SETTINGS["model"],
+                                    display_name="反推 AI 模型名称", tooltip="反推和B分段AI使用此模型名称。"),
+                    io.String.Input("requirement", optional=True, multiline=True, default="按系统提示词分析原视频；参考图用途在此说明。",
                                     display_name="本次用户要求", tooltip="第一个文本框：本次用户输入。系统提示词请填在第二个文本框。"),
                     io.String.Input("rules_text", optional=True, multiline=True, default="", lazy=True, display_name="系统提示词（原Skill正文）",
                                     placeholder="在此粘贴系统提示词，例如原 SKILL.md 正文；也可转为输入连接文本节点。",
                                     tooltip="第二个文本框：作为模型系统提示词发送。插件不再内置爆款裂变；右键转为输入后可连接外部文本节点。"),
                     io.Boolean.Input("keep_audio", optional=True, default=True, display_name="保留音轨",
-                                     tooltip="控制链路B分段工具是否保留原音轨。链路A从video1输出最长30秒参考视频及其音轨，反推保留完整原片信息，导出音频由下游节点控制。"),
+                                     tooltip="控制链路B分段工具是否保留原音轨。参考视频在32秒模式下最长30秒、17秒模式下最长15秒；反推保留完整原片信息，导出音频由下游节点控制。"),
                     io.String.Input("segment_rules_text", optional=True, multiline=True, default="", lazy=True,
                                     display_name="链路B：分段规定",
                                     placeholder="链路B：在此填写视频分段规定，AI将按此规定调用工具实际裁切。",
@@ -85,15 +104,21 @@ class KKGO_FullVideoAgent(io.ComfyNode):
                                     placeholder="在此编辑B链路最终审核全文；也可右键转为输入连接文本节点。",
                                     tooltip="全部分段反推完成后，按此文本审核并修改。默认显示原审核全文，可自行修改检查项；请保留JSON返回格式说明。A不读取此字段。"),
                     io.String.Input("review_api_key", optional=True, default="", display_name="数值",
-                                    tooltip="审核密钥；模型、协议及思考等级已固定。"),
-                    io.String.Input("review_base_url", optional=True, default=REVIEW_SETTINGS["base_url"], display_name="数值2"),
+                                    tooltip="审核密钥。"),
+                    io.String.Input("review_base_url", optional=True, default=REVIEW_SETTINGS["base_url"], display_name="审核 AI Base URL",
+                                    tooltip="审核和B抽帧AI使用此地址，可填写服务商的Base URL。"),
+                    io.String.Input("review_model", optional=True, default=REVIEW_SETTINGS["model"],
+                                    display_name="审核 AI 模型名称", tooltip="审核和B抽帧AI使用此模型名称。"),
                     *[io.Audio.Input(f"audio{index}", optional=True, display_name=f"音频{index}",
                                      tooltip=f"可选：接入后告知AI‘音频{index}绑定模特{index}’。只检测有无输入，不分析音频；A/B均生效。")
                       for index in range(1, 4)],
                     io.String.Input("chain_a_review_rules_text", optional=True, multiline=True, default=A_REVIEW_RULES, lazy=True,
                                     display_name="链路A：审核规定",
                                     placeholder="填写A链路审核提示词；也可右键转为输入连接文本节点。",
-                                    tooltip="A反推完成后独立调用审核AI，按此规则审核并修改完整原片草稿。请保留JSON返回格式说明；整篇草稿段号为1。审核AI使用上方审核区域的数值，B不读取此规则字段。")],
+                                    tooltip="A反推完成后独立调用审核AI，按此规则审核并修改完整原片草稿。请保留JSON返回格式说明；整篇草稿段号为1。审核AI使用上方审核区域的数值，B不读取此规则字段。"),
+                    io.Combo.Input("duration_mode", options=list(DURATION_MODES), default=DEFAULT_DURATION_MODE,
+                                   optional=True, display_name="时长模式",
+                                   tooltip="32秒模式（原模式）：不足32秒走A，32秒及以上走B，参考视频最长30秒。17秒模式：不足17秒走A，17秒及以上走B，参考视频最长15秒。两种模式均最多支持60秒；反推和提示词仍覆盖完整分析范围。")],
             outputs=[io.String.Output(display_name="提示词"), io.String.Output(display_name="分析证据"), io.String.Output(display_name="状态"),
                      *[io.Video.Output(display_name=f"video{index}") for index in range(1, 6)],
                      io.Image.Output(display_name="分镜参考图列表", is_output_list=True,
@@ -109,8 +134,9 @@ class KKGO_FullVideoAgent(io.ComfyNode):
 
     @classmethod
     def check_lazy_status(cls, video, rules_text=None, segment_rules_text=None, chain_b_reverse_rules_text=None,
-                          chain_b_review_rules_text=REVIEW_RULES, chain_a_review_rules_text=A_REVIEW_RULES, **kwargs):
-        routing = route_duration(video.get_duration())
+                          chain_b_review_rules_text=REVIEW_RULES, chain_a_review_rules_text=A_REVIEW_RULES,
+                          duration_mode=DEFAULT_DURATION_MODE, **kwargs):
+        routing = route_duration(video.get_duration(), duration_mode)
         if routing["chain"] == "A":
             return [name for name, value in (("rules_text", rules_text),
                     ("chain_a_review_rules_text", chain_a_review_rules_text)) if value is None]
@@ -125,20 +151,22 @@ class KKGO_FullVideoAgent(io.ComfyNode):
                       image1=None, image2=None, image3=None, image4=None, image5=None,
                       image6=None, image7=None, image8=None, image9=None, image10=None,
                       chain_b_reverse_rules_text="", chain_b_review_rules_text=REVIEW_RULES, review_ai=None, audio1=None, audio2=None, audio3=None,
-                      chain_a_review_rules_text=A_REVIEW_RULES, review_api_key="", review_base_url=None):
-        # Ignore provider overrides carried by older API-format workflows.
-        base_url, model, timeout_s, max_tokens, asr_model_dir, api_protocol, reasoning_effort = (
+                      chain_a_review_rules_text=A_REVIEW_RULES, review_api_key="", review_base_url=None,
+                      duration_mode=DEFAULT_DURATION_MODE, review_model=None):
+        base_url = resolve_reverse_base_url(base_url)
+        model = resolve_model_name(model, REVERSE_SETTINGS["model"], "反推 AI 模型名称")
+        timeout_s, max_tokens, asr_model_dir, api_protocol, reasoning_effort = (
             REVERSE_SETTINGS[name] for name in (
-                "base_url", "model", "timeout_s", "max_tokens", "asr_model_dir", "api_protocol", "reasoning_effort"))
+                "timeout_s", "max_tokens", "asr_model_dir", "api_protocol", "reasoning_effort"))
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("请在本节点的数值中填写密钥")
-        review_ai = fixed_review_config(review_api_key, review_ai, review_base_url)
+        review_ai = fixed_review_config(review_api_key, review_ai, review_base_url, review_model)
         if video is None:
             raise ValueError("请连接原视频，脚本需要检测时长后选择链路")
         # Dispatch happens before credentials, prompts, references or media staging.
         # Never round duration or inspect prompt wording to choose a chain.
-        routing = route_duration(video.get_duration())
-        print(f"[KKGO] 视频{routing['duration_seconds']}秒 → 链路{routing['chain']}", flush=True)
+        routing = route_duration(video.get_duration(), duration_mode)
+        print(f"[KKGO] {duration_mode}：视频{routing['duration_seconds']}秒 → 链路{routing['chain']}", flush=True)
         image_values = (image1, image2, image3, image4, image5, image6, image7, image8, image9, image10)
         if routing["chain"] == "B":
             result = await cancellable_to_thread(
@@ -257,10 +285,12 @@ class KKGO_FullVideoAgent(io.ComfyNode):
             audit_file.write_text(json.dumps(prepared_record, ensure_ascii=False) + "\n", encoding="utf-8")
             # Full-source frames/transcript are prepared before the reference is trimmed.
             from ..kkagent_bridge.a_reference_video import prepare_a_reference
-            reference_video, reference_record = prepare_a_reference(video, output, report["video"], timeout_s)
+            reference_limit = routing.get("reference_limit_seconds", 30.0)
+            reference_video, reference_record = prepare_a_reference(video, output, report["video"], timeout_s,
+                                                                   limit_seconds=reference_limit)
             if reference_record["trimmed"]:
                 media_text += ("\n\n【链路A参考视频长度】反推仍覆盖上面完整原片与全部抽帧、音轨证据。"
-                    "交给生成模型的参考视频仅保留前30秒，后续原片内容仍须通过本次提示词描述，不因参考视频裁短而删减反推内容。")
+                    f"交给生成模型的参考视频最多保留前{reference_limit:g}秒，后续原片内容仍须通过本次提示词描述，不因参考视频裁短而删减反推内容。")
                 bridge.cfg["video_media_evidence"] = media_text
                 prepared_record["media_evidence_characters"] = len(media_text)
                 prepared_record["media_evidence_sha256"] = hashlib.sha256(media_text.encode("utf-8")).hexdigest()
@@ -269,7 +299,7 @@ class KKGO_FullVideoAgent(io.ComfyNode):
             video_outputs = (reference_video, *[ExecutionBlocker(None) for _ in range(4)])
             yield ("", json.dumps({"chain": "A", "chain_status": "prepared",
                    "video_outputs": reference_record}, ensure_ascii=False),
-                   "链路A参考视频已就绪（最长30秒）；反推仍分析完整原片", *video_outputs)
+                   f"链路A参考视频已就绪（最长{reference_limit:g}秒）；反推仍分析完整原片", *video_outputs)
             speed.phase = 'reverse'
             before_agent = time.monotonic()
             answer = bridge.ask(bridge.session_id("full-video"), requirement + "\n\n" + media_text, refs + sheets,

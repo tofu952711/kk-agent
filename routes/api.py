@@ -22,7 +22,10 @@ def ensure_registered():
     async def status(request):
         from ..kkagent_bridge.python_backend import runtime_status
         return web.json_response({**runtime_status(), "runtime_ready": True,
-                                  "node_ids": ["KKGO_FullVideoAgent", "KKGO_VideoSegments", "KKGO_VideoReverse"]})
+                                  "node_ids": ["KKGO_FullVideoAgent", "KKGO_VideoSegments", "KKGO_VideoReverse", "KKGO_VideoFrames"]})
+
+    from ..kkagent_bridge.stage_graph import migrate_frame_prompt
+    server.add_on_prompt_handler(migrate_frame_prompt)
 
     _REGISTERED = True
     return True

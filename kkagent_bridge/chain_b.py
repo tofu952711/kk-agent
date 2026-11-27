@@ -17,8 +17,8 @@ from .review_ai import resolve_review_ai
 from .a_reference_video import prepare_reference_video
 
 
-def read_tool_videos(output, info, timeout=900):
-    """Keep complete tool ranges for analysis; bound downstream references to 30s."""
+def read_tool_videos(output, info, timeout=900, *, reference_limit_seconds=30.0):
+    """Keep complete tool ranges for analysis; cap only downstream references."""
     from comfy_api.latest import InputImpl
     from comfy_execution.graph_utils import ExecutionBlocker
     path = output / "video_segments.json"
@@ -43,17 +43,18 @@ def read_tool_videos(output, info, timeout=900):
         clip_info = {**info, "duration_seconds": actual,
                      "audio_tracks": int(bool(plan.get("keep_audio", True) and info.get("audio_tracks")))}
         reference, record = prepare_reference_video(video, output / "reference-videos" / str(index),
-            clip_info, timeout - (time.monotonic() - started), source=target, chain="B")
+            clip_info, timeout - (time.monotonic() - started), source=target, chain="B",
+            limit_seconds=reference_limit_seconds)
         reference_end = segment["start"] + min(segment["end"] - segment["start"],
             record.get("reference_end_seconds", record["actual_duration_seconds"]))
         references.append({**record, "segment_index": index, "analysis_start": segment["start"],
             "analysis_end": segment["end"], "reference_source_start": segment["start"],
             "reference_source_end": reference_end})
         videos.append(reference)
-    plan["storage"] = "in-memory references capped at 30s; complete tool files retained for analysis"
+    plan["storage"] = f"in-memory references capped at {reference_limit_seconds:g}s; complete tool files retained for analysis"
     plan["actual_durations"] = [float(video.get_duration()) for video in videos]
     plan["analysis_actual_durations"] = analysis_durations
-    plan["reference_limit_seconds"] = 30.0
+    plan["reference_limit_seconds"] = reference_limit_seconds
     plan["reference_videos"] = references
     videos.extend(ExecutionBlocker(None) for _ in range(5 - len(videos)))
     return videos, plan
@@ -117,7 +118,8 @@ def iter_chain_b(node, video, routing, api_key, base_url, model, requirement,
         segment_answer = segment_bridge.ask(segment_bridge.session_id("chain-b-segment"),
             requirement + "\n\n" + segment_media, images, timeout=timeout_s, on_progress=observe)
         videos, video_record = read_tool_videos(output, report["video"],
-            timeout=timeout_s - (time.monotonic() - prepared_at))
+            timeout=timeout_s - (time.monotonic() - prepared_at),
+            reference_limit_seconds=routing.get("reference_limit_seconds", 30.0))
         segmented_at = time.monotonic()
         stage_records = evidence(output)
         stage_records.update({"chain": "B", "chain_status": "segmented", "ai_called": True,
@@ -134,6 +136,10 @@ def iter_chain_b(node, video, routing, api_key, base_url, model, requirement,
             reverse_media += "\n分段阶段返回的依据（分析资料）：\n" + segment_answer["text"]
         if observer:
             observer("segmented", segment_bridge, output)
+        print("[KKGO] B分段视频已就绪：立即交给保存分支，选帧和反推独立继续", flush=True)
+        yield ("", json.dumps(stage_records, ensure_ascii=False, indent=2),
+               f"链路B已分段{video_record['count']}段；视频可先保存，选帧和反推独立执行",
+               *videos, [], '{"frames":[]}')
         from .b_parallel_reverse import iter_parallel_reverse
         from .frame_selection import load_output_images
         reverse_started = time.monotonic()
@@ -214,11 +220,10 @@ def run_chain_b(*args, **kwargs):
     """Compatibility path for existing one-node sequential workflows."""
     stages = iter_chain_b(*args, **kwargs)
     try:
-        next(stages)
-        try:
-            next(stages)
-        except StopIteration as finished:
-            return finished.value
-        raise RuntimeError("链路B反推阶段未正确结束")
+        while True:
+            try:
+                next(stages)
+            except StopIteration as finished:
+                return finished.value
     finally:
         stages.close()

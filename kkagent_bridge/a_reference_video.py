@@ -7,31 +7,48 @@ import math
 from pathlib import Path
 import subprocess
 import time
+import av
 
 from .ffmpeg_segments import executables
 
 
-def prepare_a_reference(video, output: Path, info, timeout=900):
-    return prepare_reference_video(video, output, info, timeout)
+def prepare_a_reference(video, output: Path, info, timeout=900, *, limit_seconds=30.0):
+    return prepare_reference_video(video, output, info, timeout, limit_seconds=limit_seconds)
 
 
-def prepare_reference_video(video, output: Path, info, timeout=900, *, source=None, chain="A"):
+def prepare_reference_video(video, output: Path, info, timeout=900, *, source=None, chain="A", limit_seconds=30.0):
     """Leave source-video.mp4 and all full-length evidence untouched."""
     duration = float(info['duration_seconds'])
     record = {'count': 1, 'split_required': False, 'ai_plan_submitted': False,
               'analysis_duration_seconds': duration, 'source_duration_seconds': duration,
-              'reference_limit_seconds': 30.0, 'trimmed': duration > 30,
-              'discarded_reference_tail_seconds': max(0.0, duration - 30),
+              'reference_limit_seconds': limit_seconds, 'trimmed': duration > limit_seconds,
+              'discarded_reference_tail_seconds': max(0.0, duration - limit_seconds),
               'plan_origin': f'chain_{chain.lower()}_reference_video', 'encoding_seconds': []}
-    if duration <= 30:
-        record.update(actual_duration_seconds=duration, storage='original VIDEO; full source is within 30 seconds')
-        return video, record
+    if duration <= limit_seconds:
+        # Platform loaders may return a legacy VideoStream without the native
+        # get_components() / save_to(crf=...) interface. Read the staged file,
+        # which already includes input edits, into an independent standard VIDEO.
+        from comfy_api.latest import InputImpl
+        source = Path(source) if source is not None else output.parent / 'source-video.mp4'
+        buffer = io.BytesIO(source.read_bytes())
+        # Audio/container rounding can extend beyond the video stream duration.
+        with av.open(buffer) as container:
+            measured = max([float(container.duration or 0) / av.time_base] +
+                           [float(stream.duration * stream.time_base) for stream in container.streams
+                            if stream.duration is not None and stream.time_base is not None])
+        if measured <= limit_seconds:
+            buffer.seek(0)
+            result = InputImpl.VideoFromFile(buffer)
+            record.update(actual_duration_seconds=measured,
+                          storage='in-memory standard VIDEO; full staged source is within reference limit')
+            return result, record
+        record['trimmed'] = True
 
     from comfy_api.latest import InputImpl
     ffmpeg, ffprobe = executables()
     source = Path(source) if source is not None else output.parent / 'source-video.mp4'
     output.mkdir(parents=True, exist_ok=True)
-    target = output / f'chain-{chain.lower()}-reference-30s.mp4'
+    target = output / f'chain-{chain.lower()}-reference-{limit_seconds:g}s.mp4'
     began = time.monotonic()
 
     def run(command):
@@ -46,7 +63,7 @@ def prepare_reference_video(video, output: Path, info, timeout=900, *, source=No
             raise RuntimeError(f'链路{chain}参考视频裁切失败：' + (result.stderr or result.stdout)[-1500:])
         return result.stdout
 
-    limit = 30.0
+    limit = float(limit_seconds)
     for attempt in range(2):
         command = [ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', source,
                    '-map', '0:v:0', '-map', '0:a:0?', '-vf', f'trim=start=0:end={limit:.9f},setpts=PTS-STARTPTS',
@@ -63,13 +80,13 @@ def prepare_reference_video(video, output: Path, info, timeout=900, *, source=No
         actual = max(durations)
         if not math.isfinite(actual) or actual <= 0:
             raise RuntimeError(f'链路{chain}裁切成品时长无效')
-        if actual <= 30.0:
+        if actual <= limit_seconds:
             break
         # Container/audio/frame rounding may extend a fractional-fps endpoint.
         # Remove at most the required boundary frame rather than exceed the cap.
-        limit -= max(actual - 30.0, 1 / max(float(info.get('fps') or 30), 1))
+        limit -= max(actual - limit_seconds, 1 / max(float(info.get('fps') or 30), 1))
     else:
-        raise RuntimeError(f'链路{chain}参考视频仍超过30秒：{actual:g}秒，未输出')
+        raise RuntimeError(f'链路{chain}参考视频仍超过{limit_seconds:g}秒：{actual:g}秒，未输出')
     if (video_stream['width'], video_stream['height']) != (info['width'], info['height']):
         raise RuntimeError(f'链路{chain}参考视频画幅校验失败')
     if any(s['codec_type'] == 'audio' for s in streams) != bool(info.get('audio_tracks')):

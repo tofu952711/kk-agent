@@ -4,7 +4,10 @@ const EFFORTS = new Set(["high", "medium", "low", "auto"]);
 // Give each prompt its own minimum instead of sharing a tiny editor area.
 export function resizeFullVideoInputs(node) {
   for (const credential of node.widgets || []) {
-    if (credential.name === "review_base_url") credential.label = "数值2";
+    if (credential.name === "review_base_url") credential.label = "审核 AI Base URL";
+    if (credential.name === "model") credential.label = "反推 AI 模型名称";
+    if (credential.name === "review_model") credential.label = "审核 AI 模型名称";
+    if (credential.name === "base_url") credential.label = "反推 AI Base URL";
     if (["api_key", "review_api_key"].includes(credential.name)) credential.label = "数值";
   }
   for (const [name, height] of [["requirement", 120], ["rules_text", 260], ["segment_rules_text", 140], ["chain_b_reverse_rules_text", 260], ["chain_b_review_rules_text", 260], ["chain_a_review_rules_text", 260]]) {
@@ -37,9 +40,21 @@ export function resizeFullVideoInputs(node) {
 
 // Repair historical field orders without altering the source saved array.
 export function migrateFullVideoWidgets(values) {
-  if (!Array.isArray(values)) return values;
+  if (!Array.isArray(values) || values.length === 0) return values;
+  if (typeof values[5] === "boolean" && typeof values[8] === "boolean") return values;
+  const previous = migratePreviousVideoWidgets(values);
+  return [...previous.slice(0, 2), "deepseek-flash", ...previous.slice(2, 11),
+    "gpt-6.1-sol", ...previous.slice(11)];
+}
+
+function migratePreviousVideoWidgets(values) {
+  if (!Array.isArray(values) || values.length === 0) return values;
+  // Current native order: key, URL, requirement, rules, keep_audio, ...
+  if (typeof values[4] === "boolean" && typeof values[7] === "boolean") return values;
   let migrated = values;
+  let reverseAddress;
   if (values.length >= 8 && typeof values[4] === "number" && typeof values[5] === "number") {
+    reverseAddress = values[1];
     const rules = values[6];
     if (typeof rules === "string" && (!rules.trim() || rules.includes("\n")) &&
         PROTOCOLS.has(values[7]) && PROTOCOLS.has(values[8])) {
@@ -57,15 +72,21 @@ export function migrateFullVideoWidgets(values) {
   }
   // 0.2.0/0.2.1 stored the review mode followed by its dynamic widgets.
   if (migrated[8] === "自定义") {
-    return [...migrated.slice(0, 8), migrated[9] ?? "", migrated[10] || "https://api.zdjapi.com", ...migrated.slice(13)];
+    migrated = [...migrated.slice(0, 8), migrated[9] ?? "", migrated[10] || "https://api.zdjapi.com", ...migrated.slice(13)];
   }
-  if (migrated[8] === "沿用当前AI") {
-    return [...migrated.slice(0, 8), "", "https://api.zdjapi.com", ...migrated.slice(9)];
+  else if (migrated[8] === "沿用当前AI") {
+    migrated = [...migrated.slice(0, 8), "", "https://api.zdjapi.com", ...migrated.slice(9)];
   }
-  if (migrated.length === 10) {
-    return [...migrated.slice(0, 9), "https://api.zdjapi.com", ...migrated.slice(9)];
+  else if (migrated.length === 10) {
+    migrated = [...migrated.slice(0, 9), "https://api.zdjapi.com", ...migrated.slice(9)];
   }
-  return migrated;
+  if (typeof reverseAddress === "string" && reverseAddress.trim()) {
+    migrated = [...migrated];
+    migrated[11] ??= "32秒模式（原模式）";
+    migrated[12] = reverseAddress;
+  }
+  return [migrated[0], migrated[12] ?? "https://api.deepseek.com",
+    ...migrated.slice(1, 11), migrated[11] ?? "32秒模式（原模式）"];
 }
 
 export function migrateFullVideoImageInputs(node, links = []) {
@@ -109,21 +130,20 @@ export function migrateFullVideoOutputs(node) {
   }
   if (node.type === "KKGO_VideoSegments") {
     node.outputs[8] ??= {name:"反推资料",type:"KKGO_VIDEO_CONTEXT",links:null,slot_index:8};
-    for (const [slot,name,type] of [[9,"分镜参考图列表","IMAGE"],[10,"抽帧信息","STRING"],
-      ...Array.from({length:5},(_,i)=>[i+11,`第${i+1}段参考图`,"IMAGE"])]) {
-      node.outputs[slot] ??= {name,type,links:null,slot_index:slot};
-    }
+    node.outputs = node.outputs.slice(0, 9);
   }
 }
 
 // Drop connections to retired settings before the new schema is configured.
 export function migrateFixedReverseInputs(node) {
-  const retired = new Set(["base_url", "model", "timeout_s", "max_tokens", "asr_model_dir", "api_protocol", "reasoning_effort",
+  const retired = new Set(["timeout_s", "max_tokens", "asr_model_dir", "api_protocol", "reasoning_effort",
     "review_ai", "review_ai.model", "review_ai.api_protocol"]);
   for (const input of node.inputs || []) {
+    if (input.name === "base_url") input.label = input.localized_name = "反推 AI Base URL";
+    if (input.name === "review_base_url") input.label = input.localized_name = "审核 AI Base URL";
     if (input.name === "review_ai.base_url") {
       input.name = "review_base_url";
-      input.label = input.localized_name = "数值2";
+      input.label = input.localized_name = "审核 AI Base URL";
       if (input.widget) input.widget = { ...input.widget, name: "review_base_url" };
     }
     if (input.name === "review_ai.api_key") {

@@ -16,7 +16,7 @@ export function migrateVideoStageGraph(graph) {
     const pos = Array.isArray(node.pos) ? node.pos : [0, 0];
     const width = Number(node.size?.[0]) || 540;
     const reverse = {
-      id: reverseId, type: "KKGO_VideoReverse", title: "KK 独立反推（与SaveVideo并行） GO",
+      id: reverseId, type: "KKGO_VideoReverse", title: "kk agent 2 独立反推（与SaveVideo并行）",
       pos: [Number(pos[0]) + width + 40, Number(pos[1]) - 180], size: [340, 150],
       flags: {}, order: (node.order || 0) + 1, mode: 0,
       inputs: [{ name: "context", type: "KKGO_VIDEO_CONTEXT", link: contextLink }],
@@ -38,7 +38,7 @@ export function migrateVideoStageGraph(graph) {
     node.type = "KKGO_VideoSegments";
     node.properties ??= {};
     node.properties["Node name for S&R"] = node.type;
-    node.title = "KK agent runninghub";
+    node.title = "kk agent 2";
     node.outputs ??= [];
     for (let index = 0; index < 3; index++) {
       if (node.outputs[index]) node.outputs[index].links = [];
@@ -80,28 +80,53 @@ export function migrateVideoStageGraph(graph) {
   return changed;
 }
 
-// Existing image savers should wait on frame selection, not final prompt review.
+// Frame consumers wait on selection only; VIDEO consumers wait on segmentation.
 export function migrateEarlyFrameLinks(graph) {
   if (!Array.isArray(graph?.nodes) || !Array.isArray(graph.links)) return false;
+  let nodeId = Math.max(Number(graph.last_node_id) || 0, ...graph.nodes.map(n => Number(n.id) || 0));
+  let linkId = Math.max(Number(graph.last_link_id) || 0, ...graph.links.map(l => Number(l[0]) || 0));
   let changed = false;
-  for (const reverse of graph.nodes.filter(n=>n.type === "KKGO_VideoReverse")) {
-    const context = graph.links.find(l=>String(l[3])===String(reverse.id) && l[4]===0 && l[5]==="KKGO_VIDEO_CONTEXT");
-    const entry = context && graph.nodes.find(n=>String(n.id)===String(context[1]) && n.type==="KKGO_VideoSegments");
-    if (!entry) continue;
-    entry.outputs ??= [];
-    for (const link of graph.links) {
-      if (String(link[1])!==String(reverse.id) || link[2]<3 || link[2]>9) continue;
-      const oldSlot=link[2], newSlot=oldSlot+6;
-      const name=oldSlot===3 ? "分镜参考图列表" : oldSlot===4 ? "抽帧信息" : `第${oldSlot-4}段参考图`;
-      entry.outputs[newSlot] ??= {name,type:oldSlot===4 ? "STRING":"IMAGE",links:[],slot_index:newSlot};
-      const old=reverse.outputs?.[oldSlot];
-      if (Array.isArray(old?.links)) old.links=old.links.filter(id=>String(id)!==String(link[0]));
-      const links=(entry.outputs[newSlot].links ??= []);
-      if (!links.includes(link[0])) links.push(link[0]);
-      link[1]=entry.id;
-      link[2]=newSlot;
-      changed=true;
+  for (const entry of graph.nodes.filter(n => n.type === "KKGO_VideoSegments")) {
+    const reverseIds = new Set(graph.links.filter(l => String(l[1]) === String(entry.id) && l[2] === 8)
+      .map(l => graph.nodes.find(n => String(n.id) === String(l[3])))
+      .filter(n => n?.type === "KKGO_VideoReverse").map(n => String(n.id)));
+    const imageLinks = graph.links.filter(l =>
+      (String(l[1]) === String(entry.id) && l[2] >= 9 && l[2] <= 15) ||
+      (reverseIds.has(String(l[1])) && l[2] >= 3 && l[2] <= 9));
+    if (!imageLinks.length) continue;
+    let frameNode = graph.nodes.find(n => n.type === "KKGO_VideoFrames" &&
+      graph.links.some(l => String(l[1]) === String(entry.id) && l[2] === 8 && String(l[3]) === String(n.id)));
+    if (!frameNode) {
+      const id = ++linkId;
+      const pos = entry.pos || [0, 0];
+      frameNode = {id: ++nodeId, type: "KKGO_VideoFrames", title: "kk agent 2 独立抽帧（与视频保存并行）",
+        pos: [Number(pos[0]) + (Number(entry.size?.[0]) || 540) + 40, Number(pos[1]) + 180],
+        size: [340, 220], flags: {}, order: (entry.order || 0) + 1, mode: 0,
+        inputs: [{name: "context", type: "KKGO_VIDEO_CONTEXT", link: id}],
+        outputs: ["分镜参考图列表", "抽帧信息", ...Array.from({length: 5}, (_, i) => `第${i + 1}段参考图`)]
+          .map((name, slot_index) => ({name, type: slot_index === 1 ? "STRING" : "IMAGE", links: [], slot_index})),
+        properties: {"Node name for S&R": "KKGO_VideoFrames"}, widgets_values: []};
+      graph.nodes.push(frameNode);
+      entry.outputs ??= [];
+      entry.outputs[8] ??= {name: "反推资料", type: "KKGO_VIDEO_CONTEXT", links: [], slot_index: 8};
+      (entry.outputs[8].links ??= []).push(id);
+      graph.links.push([id, entry.id, 8, frameNode.id, 0, "KKGO_VIDEO_CONTEXT"]);
     }
+    for (const link of imageLinks) {
+      const source = graph.nodes.find(n => String(n.id) === String(link[1]));
+      const oldSlot = link[2];
+      const newSlot = oldSlot - (String(link[1]) === String(entry.id) ? 9 : 3);
+      const old = source?.outputs?.[oldSlot];
+      if (Array.isArray(old?.links)) old.links = old.links.filter(id => String(id) !== String(link[0]));
+      (frameNode.outputs[newSlot].links ??= []).push(link[0]);
+      link[1] = frameNode.id;
+      link[2] = newSlot;
+      changed = true;
+    }
+  }
+  if (changed) {
+    graph.last_node_id = nodeId;
+    graph.last_link_id = linkId;
   }
   return changed;
 }

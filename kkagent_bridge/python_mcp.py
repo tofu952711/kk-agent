@@ -14,7 +14,7 @@ from .errors import BridgeError
 
 MAX_BYTES = 128 * 1024 * 1024
 _ACTIVE_PIDS = set()
-_WORKER_SLOTS = threading.BoundedSemaphore(2)
+_WORKER_SLOTS = threading.BoundedSemaphore(4)
 
 
 class MediaWorker:

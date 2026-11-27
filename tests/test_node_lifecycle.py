@@ -183,7 +183,7 @@ class NodeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         prompt = {
             "source": {"class_type": "KKTestSource", "inputs": {}},
             "entry": {"class_type": "KKTestEntry", "inputs": {
-                "video": ["source", 0], "api_key": "offline-placeholder", "base_url": "http://127.0.0.1:1/v1",
+                "video": ["source", 0], "api_key": "offline-placeholder", "review_api_key": "offline-placeholder", "base_url": "http://127.0.0.1:1/v1",
                 "model": "offline", "requirement": "test", "rules_text": "test"}},
             "save": {"class_type": "KKTestSink", "inputs": {"video": ["entry", 3]}},
         }

@@ -3,6 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import socket
+import ssl
 from pathlib import Path
 import sys
 import tempfile
@@ -16,7 +18,8 @@ TEMP = tempfile.TemporaryDirectory(prefix="kk-python-tests-")
 os.environ["KKGO_DATA_DIR"] = str(Path(TEMP.name) / "results")
 sys.path.insert(0, str(ROOT))
 from kkagent_bridge import python_backend as backend
-from kkagent_bridge.python_provider import Stream, payload, endpoint
+from kkagent_bridge.python_provider import Stream, payload, endpoint, transport_error
+from aiohttp.client_reqrep import ConnectionKey
 
 CALLS = []
 LOCK = threading.Lock()
@@ -32,6 +35,15 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             CALLS.append(body)
         model = body["model"]
+        if model == "broken-response":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", "100000")
+            self.end_headers()
+            self.wfile.write(b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if model == "empty-stream-three":
             attempt = sum(call["model"] == model for call in CALLS)
             delta = {"reasoning_content":"internal-only"} if attempt <= 3 else {"content":"stream-recovered"}
@@ -326,6 +338,36 @@ class RuntimeTests(unittest.TestCase):
         for url in ("http://key:secret@example.com/v1", "https://example.com/v1?key=secret", "file:///tmp/model"):
             with self.assertRaises(backend.BridgeError):
                 endpoint(self.cfg(base_url=url))
+
+    def test_transport_categories_never_expose_raw_exception_or_credentials(self):
+        key = ConnectionKey("example.com", 443, True, True, None, None, None)
+        secret = "secret-in-exception-and-api-key"
+        cases = [
+            (backend.aiohttp.ClientConnectorError(key, socket.gaierror(-2, secret)), "DNS解析失败"),
+            (backend.aiohttp.ClientConnectorError(key, OSError(101, secret)), "无法建立连接"),
+            (backend.aiohttp.ClientConnectorCertificateError(key, ssl.CertificateError(secret)), "TLS证书校验失败"),
+            (backend.aiohttp.ClientProxyConnectionError(key, OSError(111, secret)), "代理连接失败"),
+            (backend.aiohttp.ServerDisconnectedError(secret), "对端关闭连接"),
+            (backend.aiohttp.ClientPayloadError(secret), "响应内容传输不完整"),
+        ]
+        for error, label in cases:
+            with self.subTest(error=type(error).__name__):
+                result = transport_error(error, self.cfg(api_key=secret, base_url="https://example.com/private-"+secret),
+                    response_started=False, elapsed=1.25, request_bytes=1048576)
+                self.assertEqual(result.code, "provider_transport")
+                self.assertIn(label, str(result))
+                self.assertIn("主机=example.com", str(result))
+                self.assertIn("1.00 MiB", str(result))
+                self.assertNotIn(secret, str(result))
+                self.assertIsNone(result.__cause__)
+
+    def test_interrupted_http_body_reports_transport_stage_and_does_not_retry(self):
+        with self.assertRaisesRegex(backend.BridgeError, "响应内容传输不完整") as caught:
+            self.run_model(self.cfg(model="broken-response"))
+        self.assertIn("阶段=接收响应", str(caught.exception))
+        self.assertIn("ClientPayloadError", str(caught.exception))
+        self.assertEqual(len(CALLS), 1)
+        self.assertEqual(backend.runtime_status()["active_turns"], 0)
 
 
 if __name__ == "__main__":
